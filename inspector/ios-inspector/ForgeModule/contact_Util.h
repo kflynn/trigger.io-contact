@@ -7,10 +7,14 @@
 //
 
 #import <Foundation/Foundation.h>
+#import <AddressBook/AddressBook.h>
 #import <AddressBookUI/AddressBookUI.h>
 
 @interface contact_Util : NSObject
 
 + (NSDictionary*) dictFrom:(ABRecordRef)contact withFields:(NSArray*)fields;
+
++ (ABRecordRef)contactCreateFrom:(NSDictionary *)dict
+                       error_out:(CFErrorRef *)error_out;
 
 @end

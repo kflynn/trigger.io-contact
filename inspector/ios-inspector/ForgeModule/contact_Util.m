@@ -266,4 +266,298 @@
     return data;
 }
 
++ (NSError *)contactError:(NSString *)description {
+    
+    NSDictionary *errorDetail = 
+        @{ NSLocalizedDescriptionKey: description };
+    
+    NSError *thisError =
+        [NSError errorWithDomain:@"iOSContactDomain"
+                            code:1
+                        userInfo:errorDetail];
+
+    return thisError;
+}
+
++ (bool)mapElements:(ABRecordRef)newPerson
+           workDict:(NSDictionary *)workDict
+           elements:(NSArray *)elements
+          error_out:(CFErrorRef *)error_out {
+    bool result = YES;
+    // Cycle over all of our elements, looking for hits within the workDict.
+    
+    for (NSArray *element in elements) {
+        NSString *key = element[0];
+        NSNumber *propNum = element[1];
+        ABPropertyID prop = [propNum intValue];
+        
+        id value = workDict[key];
+        
+        // If we got a value...
+        
+        if (value) {
+            // ...go ahead and stuff it into newPerson.
+            result = ABRecordSetValue(newPerson,
+                                      prop, (__bridge CFTypeRef)value,
+                                      error_out);
+            
+            if (!result) {
+                // Something went wrong; get outta here.
+                break;
+            }
+        }
+    }
+    
+    return result;
+}
+
++ (bool)mapUnivalues:(ABRecordRef)newPerson
+         contactDict:(NSDictionary *)contactDict
+        propertyMaps:(NSArray *)propertyMaps
+           error_out:(CFErrorRef *)error_out {
+    bool result = YES;
+    
+    for (NSArray *map in propertyMaps) {
+        NSString *workKey = map[0];
+        NSArray *elements = map[1];
+        
+        // Assume that they want to look at the top-level dictionary...
+        NSDictionary *workDict = contactDict;
+        
+        // ...then check to see if they gave a key.
+        if ((id) workKey != [NSNull null]) {
+            // Yup.  Shift workDict down.
+            workDict = contactDict[workKey];
+        }
+        
+        if (!workDict || ([workDict count] <= 0)) {
+            // The dict they want to look at doesn't exist or is empty.
+            // Skip it.
+            continue;
+        }
+        
+        result = [self mapElements:newPerson
+                          workDict:workDict
+                          elements:elements
+                         error_out:error_out];
+    }
+
+    return result;
+}
+
++ (bool)mapMultiValues:(ABRecordRef)newPerson
+           contactDict:(NSDictionary *)contactDict
+     multipropertyMaps:(NSArray *)multipropertyMaps
+             error_out:(CFErrorRef *)error_out {
+    bool result = YES;
+    
+    for (NSArray *multiMap in multipropertyMaps) {
+        NSString *workKey = multiMap[0];
+        NSNumber *propNum = multiMap[1];
+        NSString *defaultLabel = multiMap[2];
+        NSDictionary *elements = multiMap[3];
+        
+        // Here, we MUST have a workKey...
+        NSAssert((id) workKey != [NSNull null],
+                 @"workKey cannot be null");
+        
+        // ...and it's the name of an array, not of another dictionary.
+        NSArray *workArray = contactDict[workKey];
+        
+        if (!workArray || ([workArray count] <= 0)) {
+            // The array they want to look at doesn't exist or is empty.
+            // Skip it.
+            continue;
+        }
+        
+        // OK.  Create a new multivalue...
+        ABMutableMultiValueRef multiValue =
+            ABMultiValueCreateMutable(kABMultiStringPropertyType);
+        
+        // ...and cycle over the workArray rather than the map this time.
+        for (NSDictionary *workElement in workArray) {
+            NSString *value = workElement[@"value"];
+            NSString *type = workElement[@"type"];
+            // ignore "pref" -- we don't support it.
+            
+            NSString *label = elements[type];
+            
+            if (!label || ([label length] <= 0)) {
+                // Not in the map.  Do we have a default?
+                if (defaultLabel &&
+                    ((id)defaultLabel != [NSNull null]) &&
+                    ([defaultLabel length] > 0)) {
+                    // Yeah.  Use that.
+                    label = defaultLabel;
+                }
+                
+                // If we have no match and no default, leave label as
+                // whatever was in the workArray.
+            }
+
+            // OK, off we go.  Add to the multivalue.
+            
+            result =
+                ABMultiValueAddValueAndLabel(multiValue,
+                                             (__bridge CFTypeRef)value,
+                                             (__bridge CFStringRef)label,
+                                             NULL);
+                
+            if (!result) {
+                // That ain't good.
+                NSString *errStr =
+                    [NSString stringWithFormat:@"couldn't add %@ %@ to contact",
+                        workKey, label];
+                    
+                NSError *thisError = [self contactError:errStr];
+                *error_out = (__bridge CFErrorRef)thisError;
+                break;
+            }
+        }
+        
+        if (result) {
+            // Add it to the contact.
+            result = ABRecordSetValue(newPerson, [propNum intValue],
+                                      multiValue, error_out);
+        }
+        
+        if (!result) {
+            // Aarrrrgh.
+            break;
+        }
+    }
+
+    return result;
+}
+
++ (ABRecordRef)contactCreateFrom:(NSDictionary *)dict
+                       error_out:(CFErrorRef *)error_out {
+    // Create a new person record.
+    ABRecordRef newPerson = ABPersonCreate();
+    bool result = YES;
+    
+    NSArray *propertyMaps =
+        @[
+           @[ [NSNull null],
+              @[ @[ @"note", @(kABPersonNoteProperty) ],
+                 @[ @"nickname", @(kABPersonNicknameProperty) ],
+              ],
+           ],
+           @[ @"name",
+              @[ @[ @"givenName", @(kABPersonFirstNameProperty) ],
+                 @[ @"familyName", @(kABPersonLastNameProperty) ],
+                 @[ @"honorificPrefix", @(kABPersonPrefixProperty) ],
+                 @[ @"honorificSuffix", @(kABPersonSuffixProperty) ],
+                 @[ @"middleName", @(kABPersonMiddleNameProperty) ],
+              ],
+           ],
+        ];
+    
+    // multiPropertyMaps is an array of subarrays:
+    //
+    // @[ JSON-key, kABPerson-property, default-label, map ]
+    //
+    // where the map is a dict mapping an inner JSON key to the
+    // kABPerson-multi-string-label.  
+    //
+    // The default-label may be an NSNull to mean 'preserve the JSON key
+    // as the value if it's not found.'
+    
+    NSArray *multipropertyMaps =
+        @[
+           @[ @"phoneNumbers", @(kABPersonPhoneProperty), [NSNull null],
+              @{ @"mobile": (__bridge NSString *) kABPersonPhoneMobileLabel,
+                 @"iPhone": (__bridge NSString *) kABPersonPhoneIPhoneLabel,
+                 @"main": (__bridge NSString *) kABPersonPhoneMainLabel,
+                 @"home_fax": (__bridge NSString *) kABPersonPhoneHomeFAXLabel,
+                 @"work_fax": (__bridge NSString *) kABPersonPhoneWorkFAXLabel,
+                 @"pager": (__bridge NSString *) kABPersonPhonePagerLabel,
+                 @"work": (__bridge NSString *) kABWorkLabel,
+                 @"home": (__bridge NSString *) kABHomeLabel,
+                 @"other": (__bridge NSString *) kABOtherLabel,
+              },
+           ],
+           @[ @"emails", @(kABPersonEmailProperty), [NSNull null],
+              @{ @"work": (__bridge NSString *) kABWorkLabel,
+                 @"home": (__bridge NSString *) kABHomeLabel,
+                 @"other": (__bridge NSString *) kABOtherLabel,
+              },
+           ],
+           @[ @"urls", @(kABPersonEmailProperty), [NSNull null],
+              @{ @"homepage": (__bridge NSString *) kABPersonHomePageLabel,
+                 @"work": (__bridge NSString *) kABWorkLabel,
+                 @"home": (__bridge NSString *) kABHomeLabel,
+                 @"other": (__bridge NSString *) kABOtherLabel,
+              },
+           ],
+        ];
+    
+    NSArray *orgMap =
+        @[ @[ @"name", @(kABPersonOrganizationProperty) ],
+           @[ @"department", @(kABPersonDepartmentProperty) ],
+           @[ @"title", @(kABPersonJobTitleProperty) ] ];
+    
+    result = [self mapUnivalues:newPerson
+                    contactDict:dict
+                   propertyMaps:propertyMaps
+                      error_out:error_out ];
+
+    if (result) {
+        result = [self mapMultiValues:newPerson
+                          contactDict:dict
+                    multipropertyMaps:multipropertyMaps
+                            error_out:error_out];
+    }
+    
+    if (result) {
+        // Organizations are weird, since that's an array of dicts where
+        // each dict looks like a univalue.  Do them by hand.
+        
+        NSArray *orgs = dict[@"organizations"];
+        
+        if (orgs && ([orgs count] > 0)) {
+            // Ignore all but the first org.
+            result = [self mapElements:newPerson
+                              workDict:orgs[0]
+                              elements:orgMap
+                             error_out:error_out];
+        }
+    }
+    
+    if (result) {
+        // Birthday is special, since it has to be a date, not a string.
+        // (Man, handling dates sucks.)
+        
+        NSString *bDayString = dict[@"birthday"];
+        
+        if (bDayString && ([bDayString length] > 0)) {
+            NSDateFormatter *format = [[NSDateFormatter alloc] init];
+            [format setDateFormat:@"yyyy-MM-dd HH:mm:ss Z"];
+
+            NSDate *birthday = [format dateFromString:bDayString];
+            
+            if (birthday) {
+                result = ABRecordSetValue(newPerson,
+                                          kABPersonBirthdayProperty,
+                                          (__bridge CFTypeRef)birthday,
+                                          error_out);
+            }
+            else {
+                NSLog(@"couldn't convert %@ to NSDate", bDayString);
+            }
+        }
+    }
+    
+cleanup:
+    if (!result) {
+        // Something went wrong.  Release our person...
+        CFRelease(newPerson);
+        
+        // ...and return nil.
+        newPerson = nil;
+    }
+    
+    return newPerson;
+}
+
 @end
