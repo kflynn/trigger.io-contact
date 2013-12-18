@@ -347,15 +347,15 @@
 
 + (bool)mapMultiValues:(ABRecordRef)newPerson
            contactDict:(NSDictionary *)contactDict
-     multipropertyMaps:(NSArray *)multipropertyMaps
+     multiPropertyMaps:(NSArray *)multiPropertyMaps
              error_out:(CFErrorRef *)error_out {
     bool result = YES;
     
-    for (NSArray *multiMap in multipropertyMaps) {
+    for (NSArray *multiMap in multiPropertyMaps) {
         NSString *workKey = multiMap[0];
         NSNumber *propNum = multiMap[1];
-        NSString *defaultLabel = multiMap[2];
-        NSDictionary *elements = multiMap[3];
+        NSDictionary *typeMap = multiMap[2];
+        NSDictionary *keyMap = multiMap[3];
         
         // Here, we MUST have a workKey...
         NSAssert((id) workKey != [NSNull null],
@@ -370,38 +370,67 @@
             continue;
         }
         
-        // OK.  Create a new multivalue...
+        // OK.  Create a new multivalue.  If we have a keyMap, this should
+        // be a MultiDictionary, otherwise a MultiString.
+
+        ABPropertyType mvType = 
+            (((id)keyMap == [NSNull null]) ? kABMultiStringPropertyType
+                                           : kABMultiDictionaryPropertyType);
+
         ABMutableMultiValueRef multiValue =
-            ABMultiValueCreateMutable(kABMultiStringPropertyType);
+            ABMultiValueCreateMutable(mvType);
         
-        // ...and cycle over the workArray rather than the map this time.
+        // Cycle over the workArray grabbing elements.
+
         for (NSDictionary *workElement in workArray) {
-            NSString *value = workElement[@"value"];
             NSString *type = workElement[@"type"];
             // ignore "pref" -- we don't support it.
             
-            NSString *label = elements[type];
+            NSString *label = typeMap[type];
             
             if (!label || ([label length] <= 0)) {
-                // Not in the map.  Do we have a default?
-                if (defaultLabel &&
-                    ((id)defaultLabel != [NSNull null]) &&
-                    ([defaultLabel length] > 0)) {
-                    // Yeah.  Use that.
-                    label = defaultLabel;
+                // Not in the map; just use the type itself.
+                label = type;
+            }
+             
+            // OK.  Are we a MultiString?
+
+            if (mvType == kABMultiStringPropertyType) {
+                // Yup.  Grab the value and insert.
+                id value = workElement[@"value"];
+
+                if (value) {
+                    result =
+                        ABMultiValueAddValueAndLabel(multiValue,
+                                                     (__bridge CFTypeRef)value,
+                                                     (__bridge CFStringRef)label,
+                                                     NULL);
+                }
+            }
+            else {
+                // MultiDict.  Create a new dictionary...
+
+                NSMutableDictionary *valDict =
+                    [NSMutableDictionary dictionaryWithCapacity:4];
+
+                for (NSArray *keyMapEl in keyMap) {
+                    NSString *jsonKey = keyMapEl[0];
+                    NSString *dictKey = keyMapEl[1];
+
+                    id value = workElement[jsonKey];
+
+                    if (value) {
+                        valDict[dictKey] = value;
+                    }
                 }
                 
-                // If we have no match and no default, leave label as
-                // whatever was in the workArray.
+                // Finally, add to our multivalue.
+                result =
+                    ABMultiValueAddValueAndLabel(multiValue,
+                                                 (__bridge CFTypeRef)valDict,
+                                                 (__bridge CFStringRef)label,
+                                                 NULL);
             }
-
-            // OK, off we go.  Add to the multivalue.
-            
-            result =
-                ABMultiValueAddValueAndLabel(multiValue,
-                                             (__bridge CFTypeRef)value,
-                                             (__bridge CFStringRef)label,
-                                             NULL);
                 
             if (!result) {
                 // That ain't good.
@@ -453,19 +482,60 @@
            ],
         ];
     
-    // multiPropertyMaps is an array of subarrays:
+    // multiStringMaps describes how to map JSON elements like emails
+    // to ABPerson elements.  The JSON object for emails is an array:
+    // 
+    // emails: [ { type: "home", pref: false, value: "jane@jane.com" },
+    //           { type: "work", pref: false, value: "jane@cald.com" } ]
     //
-    // @[ JSON-key, kABPerson-property, default-label, map ]
+    // Each element in the array is a dict with type, pref, and value.
     //
-    // where the map is a dict mapping an inner JSON key to the
-    // kABPerson-multi-string-label.  
+    // Each element in multiStringMaps is an NSArray:
     //
-    // The default-label may be an NSNull to mean 'preserve the JSON key
-    // as the value if it's not found.'
-    
-    NSArray *multipropertyMaps =
+    // @[ object-key, @(kABPerson-property), typeMap, keyMap ]
+    //
+    // object-key is e.g. "emails"
+    // kABPerson-property for emails would be kABPersonEmailProperty
+    // 
+    // typeMap is an NSDict that maps type values ("home", "work") to
+    // kABPerson labels, e.g.:
+    // 
+    // @{ @"work": (__bridge NSString *) kABWorkLabel,
+    //    @"home": (__bridge NSString *) kABHomeLabel,
+    // }
+    //
+    // etc.
+    //
+    // keyMap is an optional _ARRAY_ that lets us know that the value is 
+    // split across many keys, not just value, and defines the mapping
+    // between JSON keys and kABPerson keys.  It may be an NSNull if not
+    // needed.
+    // 
+    // We use keyMap for things like addresses, which looks like this in
+    // JSON:
+    // 
+    // addresses: [ { country: "United States",
+    //                formatted: display-address-with-newlines,
+    //                locality: "Cupertino", 
+    //                postalCode: "95014",
+    //                pref: false,
+    //                region: "CA",
+    //                streetAddress: "123 Main Street",
+    //                type: "home" }, 
+    //               ... ]
+    // 
+    // type and pref are still present, and type needs to be handled just
+    // as above; however, there is no value, and all the other keys need
+    // to be managed.  So we use a keyMap, part of which (leaving out the
+    // __bridge'ing we have to do) looks like:
+    //
+    // @[ @[ @"streetAddress", kABPersonAddressStreetKey ],
+    //    @[ @"locality", kABPersonAddressCityKey ],
+    //    ... ]
+
+    NSArray *multiPropertyMaps =
         @[
-           @[ @"phoneNumbers", @(kABPersonPhoneProperty), [NSNull null],
+           @[ @"phoneNumbers", @(kABPersonPhoneProperty),
               @{ @"mobile": (__bridge NSString *) kABPersonPhoneMobileLabel,
                  @"iPhone": (__bridge NSString *) kABPersonPhoneIPhoneLabel,
                  @"main": (__bridge NSString *) kABPersonPhoneMainLabel,
@@ -476,42 +546,70 @@
                  @"home": (__bridge NSString *) kABHomeLabel,
                  @"other": (__bridge NSString *) kABOtherLabel,
               },
+              [NSNull null]
            ],
-           @[ @"emails", @(kABPersonEmailProperty), [NSNull null],
+           @[ @"emails", @(kABPersonEmailProperty),
               @{ @"work": (__bridge NSString *) kABWorkLabel,
                  @"home": (__bridge NSString *) kABHomeLabel,
                  @"other": (__bridge NSString *) kABOtherLabel,
               },
+              [NSNull null],
            ],
-           @[ @"urls", @(kABPersonEmailProperty), [NSNull null],
+           @[ @"urls", @(kABPersonURLProperty),
               @{ @"homepage": (__bridge NSString *) kABPersonHomePageLabel,
                  @"work": (__bridge NSString *) kABWorkLabel,
                  @"home": (__bridge NSString *) kABHomeLabel,
                  @"other": (__bridge NSString *) kABOtherLabel,
               },
+              [NSNull null],
+           ],
+           @[ @"addresses", @(kABPersonAddressProperty),
+              @{ @"work": (__bridge NSString *) kABWorkLabel,
+                 @"home": (__bridge NSString *) kABHomeLabel,
+                 @"other": (__bridge NSString *) kABOtherLabel,
+              },
+              @[ @[ @"streetAddress",
+                     (__bridge NSString *) kABPersonAddressStreetKey ],
+                 @[ @"locality",
+                     (__bridge NSString *) kABPersonAddressCityKey ],
+                 @[ @"region",
+                     (__bridge NSString *) kABPersonAddressStateKey ],
+                 @[ @"postalCode",
+                     (__bridge NSString *) kABPersonAddressZIPKey ],
+                 @[ @"country",
+                     (__bridge NSString *) kABPersonAddressCountryKey ],
+              ],
            ],
         ];
-    
+
+    // Organizations, sadly, are just weird: the iOS address book only
+    // supports one of them, and it uses top-level properties to do it, but
+    // JSON can store multiple values in an array where each member of the
+    // array looks like a univalue.
+
     NSArray *orgMap =
         @[ @[ @"name", @(kABPersonOrganizationProperty) ],
            @[ @"department", @(kABPersonDepartmentProperty) ],
            @[ @"title", @(kABPersonJobTitleProperty) ] ];
-    
+
+    // OK.  Map the univalues...
     result = [self mapUnivalues:newPerson
                     contactDict:dict
                    propertyMaps:propertyMaps
                       error_out:error_out ];
 
     if (result) {
+        // ...then the multivalues...
         result = [self mapMultiValues:newPerson
                           contactDict:dict
-                    multipropertyMaps:multipropertyMaps
+                    multiPropertyMaps:multiPropertyMaps
                             error_out:error_out];
     }
     
+    // ...and then pick up the weird special stuff.
+
     if (result) {
-        // Organizations are weird, since that's an array of dicts where
-        // each dict looks like a univalue.  Do them by hand.
+        // Organizations are weird, as noted above.
         
         NSArray *orgs = dict[@"organizations"];
         
