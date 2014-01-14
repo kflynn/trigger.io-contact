@@ -646,6 +646,30 @@
         }
     }
     
+    if (result) {
+        // Photos are special, too.  We need to take the first one and
+        // turn it into an image.  Thankfully, NSURL understands the
+        // data: URI...
+        
+        NSArray *photos = dict[@"photos"];
+        
+        if (photos && ([photos count] > 0))  {
+            NSString *photoString = photos[0][@"value"];
+
+            if (photoString && ([photoString length] > 0)) {
+                NSURL *photoURL = [NSURL URLWithString:photoString];
+                NSData *photoData = [NSData dataWithContentsOfURL:photoURL];
+
+                if (photoData && ([photoData length] > 0)) {
+                    // Finally!
+                    result = ABPersonSetImageData(newPerson,
+                                                  (__bridge CFDataRef)photoData,
+                                                  error_out);
+                }
+            }
+        }
+    }
+    
 cleanup:
     if (!result) {
         // Something went wrong.  Release our person...
