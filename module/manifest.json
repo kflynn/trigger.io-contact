@@ -1,8 +1,8 @@
 {
-    "changes": "* Fix Android crash on forge.contact.selectAll(['id'])", 
-    "description": "Access contacts saved by the user on their device.\n\nThe contact module allows you to programmatically, or via a user prompt, load contact information from the devices contact list.", 
+    "changes": "* Support adding contacts to device address book.",
+    "description": "Access contacts saved by the user on their device.\n\nThe contact module allows you read and write contacts in the device's contact list, either programatically or via a user prompt.", 
     "min_platform_version": "v2.1.0", 
-    "namespace": "contact", 
+    "namespace": "contact",
     "platform_version": "v2.1.0", 
-    "version": "2.3"
+    "version": "2.4"
 }
