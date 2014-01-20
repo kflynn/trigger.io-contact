@@ -14,8 +14,15 @@ import android.content.ContentProviderOperation;
 import android.database.Cursor;
 import android.provider.ContactsContract;
 import android.provider.ContactsContract.CommonDataKinds.BaseTypes;
+import android.provider.ContactsContract.CommonDataKinds.Email;
+import android.provider.ContactsContract.CommonDataKinds.Event;
+import android.provider.ContactsContract.CommonDataKinds.Im;
+import android.provider.ContactsContract.CommonDataKinds.Note;
 import android.provider.ContactsContract.CommonDataKinds.Organization;
+import android.provider.ContactsContract.CommonDataKinds.Phone;
 import android.provider.ContactsContract.CommonDataKinds.StructuredName;
+import android.provider.ContactsContract.CommonDataKinds.StructuredPostal;
+import android.provider.ContactsContract.CommonDataKinds.Website;
 import android.provider.ContactsContract.Data;
 import android.provider.ContactsContract.RawContacts;
 import android.util.Base64;
@@ -26,6 +33,11 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
+
+interface JSONConverter {
+    public void execute(ArrayList<ContentProviderOperation> ops,
+                        int backRef, JsonObject obj);
+}
 
 class InsertOperation {
     private JsonObject obj;
@@ -62,6 +74,14 @@ class InsertOperation {
         return value;
     }
 
+    public void withValue(String key, String value) {
+        this.op.withValue(key, value);
+    }
+
+    public void withValue(String key, int value) {
+        this.op.withValue(key, value);
+    }
+
     public void checkField(String field, String key) {
         checkField(field, key, this.obj);
     }
@@ -74,28 +94,31 @@ class InsertOperation {
         }
 
         ForgeLog.d("- adding op for " + key + ": " + value);
-        this.op.withValue(key, value);
+        this.withValue(key, value);
         this.needsAdd = true;
     } 
 
     public void mapType(HashMap<String, Integer> typeMap,
-    		            String typeKey, int customType,
-    		            String labelKey) {
+                        String typeKey, int customType,
+                        String labelKey) {
         String objType = this.fetch("type");
 
         if (objType == null) {
             // Hmm.  No type.  Screw it, do nothing.
-            ForgeLog.d("- type: missing key");
+            ForgeLog.d("-- type: missing key");
             return;
         }
 
         // Does this appear in our map?
-        Integer mappedType = typeMap.get(objType);
+        Integer mappedType = typeMap.get(objType.toLowerCase());
 
         if (mappedType != null) {
+            ForgeLog.d("-- type " + objType + ": " + mappedType);
             this.op.withValue(typeKey, mappedType);
         }
         else {
+            ForgeLog.d("-- custom type " + objType + ": " + 
+                       customType + ", setting " + labelKey);
             this.op.withValue(typeKey, customType)
                    .withValue(labelKey, objType);
         }
@@ -112,6 +135,16 @@ class Util {
     public static JsonArray allFields = new JsonArray();
     public static JsonArray allFieldsForAdd = new JsonArray();
     public static HashMap<String, Integer> typeMapOrganization =
+        new HashMap<String, Integer>();
+    public static HashMap<String, Integer> typeMapPhone =
+        new HashMap<String, Integer>();
+    public static HashMap<String, Integer> typeMapAddress =
+        new HashMap<String, Integer>();
+    public static HashMap<String, Integer> typeMapEmail =
+        new HashMap<String, Integer>();
+    public static HashMap<String, Integer> typeMapIMProtocol =
+        new HashMap<String, Integer>();
+    public static HashMap<String, Integer> typeMapURL =
         new HashMap<String, Integer>();
 
     static {
@@ -140,8 +173,58 @@ class Util {
         allFieldsForAdd.addAll(allFields);
         allFieldsForAdd.add(new JsonPrimitive("displayName"));
 
-        typeMapOrganization.put("work", Organization.TYPE_WORK);
         typeMapOrganization.put("other", Organization.TYPE_OTHER);
+        typeMapOrganization.put("work", Organization.TYPE_WORK);
+
+        typeMapPhone.put("assistant", Phone.TYPE_ASSISTANT);
+        typeMapPhone.put("callback", Phone.TYPE_CALLBACK);
+        typeMapPhone.put("car", Phone.TYPE_CAR);
+        typeMapPhone.put("company_main", Phone.TYPE_COMPANY_MAIN);
+        typeMapPhone.put("fax_home", Phone.TYPE_FAX_HOME);
+        typeMapPhone.put("fax_work", Phone.TYPE_FAX_WORK);
+        typeMapPhone.put("home", Phone.TYPE_HOME);
+        typeMapPhone.put("isdn", Phone.TYPE_ISDN);
+        typeMapPhone.put("main", Phone.TYPE_MAIN);
+        typeMapPhone.put("mms", Phone.TYPE_MMS);
+        typeMapPhone.put("mobile", Phone.TYPE_MOBILE);
+        typeMapPhone.put("other", Phone.TYPE_OTHER);
+        typeMapPhone.put("other", Phone.TYPE_OTHER);
+        typeMapPhone.put("other_fax", Phone.TYPE_OTHER_FAX);
+        typeMapPhone.put("pager", Phone.TYPE_PAGER);
+        typeMapPhone.put("radio", Phone.TYPE_RADIO);
+        typeMapPhone.put("telex", Phone.TYPE_TELEX);
+        typeMapPhone.put("tty_tdd", Phone.TYPE_TTY_TDD);
+        typeMapPhone.put("work", Phone.TYPE_WORK);
+        typeMapPhone.put("work", Phone.TYPE_WORK);
+        typeMapPhone.put("work_mobile", Phone.TYPE_WORK_MOBILE);
+        typeMapPhone.put("work_pager", Phone.TYPE_WORK_PAGER);
+
+        typeMapAddress.put("home", StructuredPostal.TYPE_HOME);
+        typeMapAddress.put("other", StructuredPostal.TYPE_OTHER);
+        typeMapAddress.put("work", StructuredPostal.TYPE_WORK);
+
+        typeMapEmail.put("home", Email.TYPE_HOME);
+        typeMapEmail.put("other", Email.TYPE_OTHER);
+        typeMapEmail.put("mobile", Email.TYPE_MOBILE);
+        typeMapEmail.put("work", Email.TYPE_WORK);
+
+        typeMapIMProtocol.put("aim", Im.PROTOCOL_AIM);
+        typeMapIMProtocol.put("msn", Im.PROTOCOL_MSN);
+        typeMapIMProtocol.put("yahoo", Im.PROTOCOL_YAHOO);
+        typeMapIMProtocol.put("skype", Im.PROTOCOL_SKYPE);
+        typeMapIMProtocol.put("qq", Im.PROTOCOL_QQ);
+        typeMapIMProtocol.put("google_talk", Im.PROTOCOL_GOOGLE_TALK);
+        typeMapIMProtocol.put("icq", Im.PROTOCOL_ICQ);
+        typeMapIMProtocol.put("jabber", Im.PROTOCOL_JABBER);
+        typeMapIMProtocol.put("netmeeting", Im.PROTOCOL_NETMEETING);
+
+        typeMapURL.put("blog", Website.TYPE_BLOG);
+        typeMapURL.put("ftp", Website.TYPE_FTP);
+        typeMapURL.put("home", Website.TYPE_HOME);
+        typeMapURL.put("homepage", Website.TYPE_HOMEPAGE);
+        typeMapURL.put("other", Website.TYPE_OTHER);
+        typeMapURL.put("profile", Website.TYPE_PROFILE);
+        typeMapURL.put("work", Website.TYPE_WORK);
     }
 	
     /**
@@ -638,7 +721,7 @@ class Util {
                 url.addProperty("type", "other");
                 break;
             case BaseTypes.TYPE_CUSTOM:
-                url.addProperty("type", getValue(cursor, ContactsContract.CommonDataKinds.Website.TYPE, columnMemo));
+                url.addProperty("type", getValue(cursor, ContactsContract.CommonDataKinds.Website.LABEL, columnMemo));
                 break;
             default:
                 url.add("type", JsonNull.INSTANCE);
@@ -718,31 +801,33 @@ class Util {
         op.checkField("displayName", StructuredName.DISPLAY_NAME, obj);
     }
 
+    private static void 
+    jsonConvertBirthday(ArrayList<ContentProviderOperation> ops,
+                        int backRef, JsonObject obj) {
+        InsertOperation op = 
+            new InsertOperation(obj, backRef, 
+                                Event.CONTENT_ITEM_TYPE);
+
+        op.checkField("birthday", Event.START_DATE, obj);
+        op.withValue(Event.TYPE, Event.TYPE_BIRTHDAY);
+        
+        op.done(ops);
+    }
+
+    private static void 
+    jsonConvertNote(ArrayList<ContentProviderOperation> ops,
+                    int backRef, JsonObject obj) {
+        InsertOperation op = 
+            new InsertOperation(obj, backRef, 
+                                Note.CONTENT_ITEM_TYPE);
+        op.checkField("note", Note.NOTE, obj);
+
+        op.done(ops);
+    }
+
     private static void
     jsonConvertOrganization(ArrayList<ContentProviderOperation> ops,
-                            int backRef, JsonElement element) {
-        if (!element.isJsonArray()) {
-            // Not us.
-            ForgeLog.d("- organizations: not a JSON array");
-            return;
-        }
-
-        JsonArray orgArray = element.getAsJsonArray();
-
-        if (orgArray.size() == 0) {
-            ForgeLog.d("- organizations: empty array");
-            return;
-        }
-
-        JsonElement orgElement = orgArray.get(0);
-        
-        if (!orgElement.isJsonObject()) {
-            ForgeLog.d("- organizations[0]: not a JSON object");
-            return;
-        }
-
-        JsonObject obj = orgElement.getAsJsonObject();
-
+                            int backRef, JsonObject obj) {
         // OK.  Allocate an op that looks at obj, which is to say the first 
         // organization entry...
 
@@ -760,14 +845,128 @@ class Util {
         op.done(ops);
     }
 
-//    private static void
-//    jsonConvertPhone(ArrayList<ContentProviderOperation> ops,
-//                     int backRef, JsonObject obj) {
-//        // This takes a _single_ phone entry.  Our caller should've 
-//        // unrolled the phoneNumbers array for us.
-//
-//        
-//    }
+    private static void
+    jsonConvertPhone(ArrayList<ContentProviderOperation> ops,
+                     int backRef, JsonObject obj) {
+        InsertOperation op = 
+            new InsertOperation(obj, backRef, 
+                                Phone.CONTENT_ITEM_TYPE);
+
+        op.checkField("value", Phone.NUMBER);
+        op.mapType(typeMapPhone,
+                   Phone.TYPE, Phone.TYPE_CUSTOM,
+                   Phone.LABEL);
+
+        op.done(ops);
+    }
+
+    private static void
+    jsonConvertEmail(ArrayList<ContentProviderOperation> ops,
+                     int backRef, JsonObject obj) {
+        InsertOperation op = 
+            new InsertOperation(obj, backRef, 
+                                Email.CONTENT_ITEM_TYPE);
+
+        op.checkField("value", Email.ADDRESS);
+        op.mapType(typeMapEmail,
+                   Email.TYPE, Email.TYPE_CUSTOM,
+                   Email.LABEL);
+
+        op.done(ops);
+    }
+
+    private static void
+    jsonConvertIM(ArrayList<ContentProviderOperation> ops,
+                     int backRef, JsonObject obj) {
+        InsertOperation op = 
+            new InsertOperation(obj, backRef, 
+                                Im.CONTENT_ITEM_TYPE);
+
+        op.checkField("value", Im.DATA);
+
+        // "type" in the IM W3C entry really means "protocol".  There isn't
+        // a separate type, so we ignore Im.TYPE.
+
+        op.mapType(typeMapIMProtocol,
+                   Im.PROTOCOL, Im.PROTOCOL_CUSTOM,
+                   Im.CUSTOM_PROTOCOL);
+
+        op.done(ops);
+    }
+
+    private static void
+    jsonConvertURL(ArrayList<ContentProviderOperation> ops,
+                     int backRef, JsonObject obj) {
+        InsertOperation op = 
+            new InsertOperation(obj, backRef, 
+                                Website.CONTENT_ITEM_TYPE);
+
+        op.checkField("value", Website.URL);
+        op.mapType(typeMapURL,
+                   Website.TYPE, Website.TYPE_CUSTOM,
+                   Website.LABEL);
+
+        op.done(ops);
+    }
+
+    private static void
+    jsonConvertAddress(ArrayList<ContentProviderOperation> ops,
+                     int backRef, JsonObject obj) {
+        InsertOperation op = 
+            new InsertOperation(obj, backRef, 
+                                StructuredPostal.CONTENT_ITEM_TYPE);
+
+        op.checkField("formatted", StructuredPostal.FORMATTED_ADDRESS);
+        op.checkField("streetAddress", StructuredPostal.STREET);
+        // We don't support POBOX or NEIGHBORHOOD.
+        op.checkField("locality", StructuredPostal.CITY);
+        op.checkField("region", StructuredPostal.REGION);
+        op.checkField("postalCode", StructuredPostal.POSTCODE);
+        op.checkField("country", StructuredPostal.COUNTRY);
+
+        op.mapType(typeMapAddress,
+                   StructuredPostal.TYPE, StructuredPostal.TYPE_CUSTOM,
+                   StructuredPostal.LABEL);
+
+        op.done(ops);
+    }
+
+    private static void iterateElements(ArrayList<ContentProviderOperation> ops,
+                                        int backRef, String what, 
+                                        JsonElement element, int maxCount,
+                                        JSONConverter conv) {
+        if (!element.isJsonArray()) {
+            // Not us.
+            ForgeLog.d("- " + what + ": not a JSON array");
+            return;
+        }
+
+        JsonArray elementArray = element.getAsJsonArray();
+
+        if (elementArray.size() == 0) {
+            ForgeLog.d("- " + what + ": empty array");
+            return;
+        }
+        
+        int count = 0;
+
+        for (JsonElement subElement : elementArray) {
+            if (!subElement.isJsonObject()) {
+                // Hmm.  Weird, man.
+                ForgeLog.e("- " + what +
+                           ": element " + count + " is not an object");
+                continue;
+            }
+
+            conv.execute(ops, backRef, subElement.getAsJsonObject());
+
+            count++;
+
+            if ((maxCount > 0) && (count >= maxCount)) {
+                break;
+            }
+        }
+    }
 
     public static ArrayList<ContentProviderOperation>
     opsFromJSONObject(ForgeTask task, String accountType, String accountName,
@@ -816,6 +1015,8 @@ class Util {
             }
 
             ForgeLog.d("found field " + field);
+            JSONConverter conv = null;
+            int maxCount = 0;
 
             if (field.equals("name")) {
                 jsonConvertName(nameOp, child.getAsJsonObject());
@@ -826,9 +1027,73 @@ class Util {
                 ForgeLog.d("calling ConvertDisplayName");
                 jsonConvertDisplayName(nameOp, contact);
             }
+            else if (field.equals("birthday")) {
+                // Note that we pass contact here, not child, because 
+                // birthday is a scalar, not an object.
+                ForgeLog.d("calling ConvertBirthday");
+                jsonConvertBirthday(ops, rawContactInsertIndex, contact);
+            }
+            else if (field.equals("note")) {
+                // Note that we pass contact here, not child, because 
+                // note is a scalar, not an object.
+                ForgeLog.d("calling ConvertNote");
+                jsonConvertNote(ops, rawContactInsertIndex, contact);
+            }
             else if (field.equals("organizations")) {
-                ForgeLog.d("calling ConvertOrganization");
-                jsonConvertOrganization(ops, rawContactInsertIndex, child);
+                conv = new JSONConverter() {
+                    public void execute(ArrayList<ContentProviderOperation> ops,
+                                        int backRef, JsonObject obj) {
+                        jsonConvertOrganization(ops, backRef, obj);
+                    }
+                };
+
+                maxCount = 1;
+            }
+            else if (field.equals("phoneNumbers")) {
+                conv = new JSONConverter() {
+                    public void execute(ArrayList<ContentProviderOperation> ops,
+                                        int backRef, JsonObject obj) {
+                        jsonConvertPhone(ops, backRef, obj);
+                    }
+                };
+            }
+            else if (field.equals("addresses")) {
+                conv = new JSONConverter() {
+                    public void execute(ArrayList<ContentProviderOperation> ops,
+                                        int backRef, JsonObject obj) {
+                        jsonConvertAddress(ops, backRef, obj);
+                    }
+                };
+            }
+            else if (field.equals("emails")) {
+                conv = new JSONConverter() {
+                    public void execute(ArrayList<ContentProviderOperation> ops,
+                                        int backRef, JsonObject obj) {
+                        jsonConvertEmail(ops, backRef, obj);
+                    }
+                };
+            }
+            else if (field.equals("ims")) {
+                conv = new JSONConverter() {
+                    public void execute(ArrayList<ContentProviderOperation> ops,
+                                        int backRef, JsonObject obj) {
+                        jsonConvertIM(ops, backRef, obj);
+                    }
+                };
+            }
+            else if (field.equals("urls")) {
+                conv = new JSONConverter() {
+                    public void execute(ArrayList<ContentProviderOperation> ops,
+                                        int backRef, JsonObject obj) {
+                        jsonConvertURL(ops, backRef, obj);
+                    }
+                };
+            }
+
+            if (conv != null) {
+                ForgeLog.d("- iterating for " + field);
+                iterateElements(ops, rawContactInsertIndex, field,
+                				child, maxCount, conv);
             }
         }
 
