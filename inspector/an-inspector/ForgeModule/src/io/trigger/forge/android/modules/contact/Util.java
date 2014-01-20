@@ -17,9 +17,11 @@ import android.provider.ContactsContract.CommonDataKinds.BaseTypes;
 import android.provider.ContactsContract.CommonDataKinds.Email;
 import android.provider.ContactsContract.CommonDataKinds.Event;
 import android.provider.ContactsContract.CommonDataKinds.Im;
+import android.provider.ContactsContract.CommonDataKinds.Nickname;
 import android.provider.ContactsContract.CommonDataKinds.Note;
 import android.provider.ContactsContract.CommonDataKinds.Organization;
 import android.provider.ContactsContract.CommonDataKinds.Phone;
+import android.provider.ContactsContract.CommonDataKinds.Photo;
 import android.provider.ContactsContract.CommonDataKinds.StructuredName;
 import android.provider.ContactsContract.CommonDataKinds.StructuredPostal;
 import android.provider.ContactsContract.CommonDataKinds.Website;
@@ -369,6 +371,17 @@ class Util {
             return Integer.parseInt(value); 
         }
     }
+
+    private static void 
+    addIfPresent(JsonObject obj, String fieldName, 
+                 Cursor cursor, Map<String, Integer> columnMemo,
+                 String key) {
+        String value = getValue(cursor, key, columnMemo);
+
+        if ((value != null) && (value.length() > 0)) {
+            obj.addProperty(fieldName, value);
+        }
+    }
 	
     /**
      * For a mapping of contactId to Json contact objects, fill out each contact with the projection of fields
@@ -467,54 +480,70 @@ class Util {
     }
 	
     // See contactIdToJsonObject
-    public static JsonObject contactToJSON(Cursor cursor, JsonObject contact, String[] projection) {
+    public static JsonObject contactToJSON(Cursor cursor, JsonObject contact,
+                                           String[] projection) {
         Map<String, Integer> columnMemo = new Hashtable<String, Integer>();
+
         for (int idx=0; idx<projection.length; idx++) {
             columnMemo.put(projection[idx], idx);
         }
 		
-        contact.addProperty("displayName", Util.getValue(cursor, ContactsContract.Data.DISPLAY_NAME, columnMemo));
-        contact.addProperty("id", Util.getValue(cursor, ContactsContract.Contacts._ID, columnMemo));
+        addIfPresent(contact, "displayName", cursor, columnMemo,
+                     Data.DISPLAY_NAME);
+        addIfPresent(contact, "id", cursor, columnMemo,
+                     ContactsContract.Contacts._ID);
 		
-        String mimeType = getValue(cursor, ContactsContract.Data.MIMETYPE, columnMemo);
+        String mimeType = getValue(cursor, Data.MIMETYPE, columnMemo);
 		
-        if (mimeType.equals(ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE)) {
-            contact.addProperty("nickname", getValue(cursor, ContactsContract.CommonDataKinds.Nickname.NAME, columnMemo));
-        } else if (mimeType.equals(ContactsContract.CommonDataKinds.Note.CONTENT_ITEM_TYPE)) {
-            contact.addProperty("note", getValue(cursor, ContactsContract.CommonDataKinds.Note.NOTE, columnMemo));
-        } else if (mimeType.equals(ContactsContract.CommonDataKinds.Event.CONTENT_ITEM_TYPE)) {
-            if (getValue(cursor, ContactsContract.CommonDataKinds.Event.TYPE, columnMemo).equals(ContactsContract.CommonDataKinds.Event.TYPE_BIRTHDAY)) {
-                contact.addProperty("birthday", getValue(cursor, ContactsContract.CommonDataKinds.Event.START_DATE, columnMemo));
+        if (mimeType.equals(Nickname.CONTENT_ITEM_TYPE)) {
+            addIfPresent(contact, "nickname", cursor, columnMemo,
+                         Nickname.NAME);
+        } else if (mimeType.equals(Note.CONTENT_ITEM_TYPE)) {
+            addIfPresent(contact, "note", cursor, columnMemo,
+                         Note.NOTE);
+        } else if (mimeType.equals(Event.CONTENT_ITEM_TYPE)) {
+            if (getValue(cursor, Event.TYPE, columnMemo).equals(Event.TYPE_BIRTHDAY)) {
+                contact.addProperty("birthday", getValue(cursor, Event.START_DATE, columnMemo));
             }
-        } else if (mimeType.equals(ContactsContract.CommonDataKinds.StructuredName.CONTENT_ITEM_TYPE)) {
+        } else if (mimeType.equals(StructuredName.CONTENT_ITEM_TYPE)) {
             JsonObject name = new JsonObject();
-            name.addProperty("familyName", getValue(cursor, ContactsContract.CommonDataKinds.StructuredName.FAMILY_NAME, columnMemo));
-            name.addProperty("formatted", getValue(cursor, ContactsContract.CommonDataKinds.StructuredName.DISPLAY_NAME, columnMemo));
-            name.addProperty("givenName", getValue(cursor, ContactsContract.CommonDataKinds.StructuredName.GIVEN_NAME, columnMemo));
-            name.addProperty("honorificPrefix", getValue(cursor, ContactsContract.CommonDataKinds.StructuredName.PREFIX, columnMemo));
-            name.addProperty("honorificSuffix", getValue(cursor, ContactsContract.CommonDataKinds.StructuredName.SUFFIX, columnMemo));
-            name.addProperty("middleName", getValue(cursor, ContactsContract.CommonDataKinds.StructuredName.MIDDLE_NAME, columnMemo));
+            
+            addIfPresent(name, "familyName", cursor, columnMemo,
+                         StructuredName.FAMILY_NAME);
+            addIfPresent(name, "formatted", cursor, columnMemo,
+                         StructuredName.DISPLAY_NAME);
+            addIfPresent(name, "givenName", cursor, columnMemo,
+                         StructuredName.GIVEN_NAME);
+            addIfPresent(name, "honorificPrefix", cursor, columnMemo,
+                         StructuredName.PREFIX);
+            addIfPresent(name, "honorificSuffix", cursor, columnMemo,
+                         StructuredName.SUFFIX);
+            addIfPresent(name, "middleName", cursor, columnMemo,
+                         StructuredName.MIDDLE_NAME);
             contact.add("name", name);
-        } else if (mimeType.equals(ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE)) {
+        } else if (mimeType.equals(Email.CONTENT_ITEM_TYPE)) {
             JsonObject email = new JsonObject();
             JsonArray emails;
-            email.addProperty("value", getValue(cursor, ContactsContract.CommonDataKinds.Email.DATA1, columnMemo));
+
+            email.addProperty("value",
+                              getValue(cursor, Email.DATA1, columnMemo));
             email.addProperty("pref", false);
-            switch (getValueOrMinusOne(cursor, ContactsContract.CommonDataKinds.Email.TYPE, columnMemo)) {
-            case ContactsContract.CommonDataKinds.Email.TYPE_HOME:
+            switch (getValueOrMinusOne(cursor, Email.TYPE, columnMemo)) {
+            case Email.TYPE_HOME:
                 email.addProperty("type", "home");
                 break;
-            case ContactsContract.CommonDataKinds.Email.TYPE_WORK:
+            case Email.TYPE_WORK:
                 email.addProperty("type", "work");
                 break;
-            case ContactsContract.CommonDataKinds.Email.TYPE_OTHER:
+            case Email.TYPE_OTHER:
                 email.addProperty("type", "other");
                 break;
-            case ContactsContract.CommonDataKinds.Email.TYPE_MOBILE:
+            case Email.TYPE_MOBILE:
                 email.addProperty("type", "mobile");
                 break;
             case BaseTypes.TYPE_CUSTOM:
-                email.addProperty("type", getValue(cursor, ContactsContract.CommonDataKinds.Email.LABEL, columnMemo));
+                addIfPresent(email, "type", cursor, columnMemo,
+                             Email.LABEL);
                 break;
             default:
                 email.add("type", JsonNull.INSTANCE);
@@ -527,74 +556,77 @@ class Util {
             }
             emails.add(email);
             contact.add("emails", emails);
-        } else if (mimeType.equals(ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE)) {
+        } else if (mimeType.equals(Phone.CONTENT_ITEM_TYPE)) {
             JsonObject phone = new JsonObject();
             JsonArray phones;
-            phone.addProperty("value", getValue(cursor, ContactsContract.CommonDataKinds.Phone.NUMBER, columnMemo));
+
+            addIfPresent(phone, "value", cursor, columnMemo,
+                         Phone.NUMBER);
             phone.addProperty("pref", false);
-            switch (getValueOrMinusOne(cursor, ContactsContract.CommonDataKinds.Phone.TYPE, columnMemo)) {
-            case ContactsContract.CommonDataKinds.Phone.TYPE_HOME:
+            switch (getValueOrMinusOne(cursor, Phone.TYPE, columnMemo)) {
+            case Phone.TYPE_HOME:
                 phone.addProperty("type", "home");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_MOBILE:
+            case Phone.TYPE_MOBILE:
                 phone.addProperty("type", "mobile");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_WORK:
+            case Phone.TYPE_WORK:
                 phone.addProperty("type", "work");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_FAX_WORK:
+            case Phone.TYPE_FAX_WORK:
                 phone.addProperty("type", "fax_work");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_FAX_HOME:
+            case Phone.TYPE_FAX_HOME:
                 phone.addProperty("type", "fax_home");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_PAGER:
+            case Phone.TYPE_PAGER:
                 phone.addProperty("type", "pager");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_OTHER:
+            case Phone.TYPE_OTHER:
                 phone.addProperty("type", "other");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_CALLBACK:
+            case Phone.TYPE_CALLBACK:
                 phone.addProperty("type", "callback");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_CAR:
+            case Phone.TYPE_CAR:
                 phone.addProperty("type", "car");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_COMPANY_MAIN:
+            case Phone.TYPE_COMPANY_MAIN:
                 phone.addProperty("type", "company_main");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_ISDN:
+            case Phone.TYPE_ISDN:
                 phone.addProperty("type", "isdn");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_MAIN:
+            case Phone.TYPE_MAIN:
                 phone.addProperty("type", "main");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_OTHER_FAX:
+            case Phone.TYPE_OTHER_FAX:
                 phone.addProperty("type", "other_fax");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_RADIO:
+            case Phone.TYPE_RADIO:
                 phone.addProperty("type", "radio");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_TELEX:
+            case Phone.TYPE_TELEX:
                 phone.addProperty("type", "telex");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_TTY_TDD:
+            case Phone.TYPE_TTY_TDD:
                 phone.addProperty("type", "tty_tdd");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_WORK_MOBILE:
+            case Phone.TYPE_WORK_MOBILE:
                 phone.addProperty("type", "work_mobile");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_WORK_PAGER:
+            case Phone.TYPE_WORK_PAGER:
                 phone.addProperty("type", "work_pager");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_ASSISTANT:
+            case Phone.TYPE_ASSISTANT:
                 phone.addProperty("type", "assistant");
                 break;
-            case ContactsContract.CommonDataKinds.Phone.TYPE_MMS:
+            case Phone.TYPE_MMS:
                 phone.addProperty("type", "mms");
                 break;
             case BaseTypes.TYPE_CUSTOM:
-                phone.addProperty("type", getValue(cursor, ContactsContract.CommonDataKinds.Phone.LABEL, columnMemo));
+                addIfPresent(phone, "type", cursor, columnMemo,
+                             Phone.LABEL);
                 break;
             default:
                 phone.add("type", JsonNull.INSTANCE);
@@ -607,35 +639,42 @@ class Util {
             }
             phones.add(phone);
             contact.add("phoneNumbers", phones);
-        } else if (mimeType.equals(ContactsContract.CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE)) {
+        } else if (mimeType.equals(StructuredPostal.CONTENT_ITEM_TYPE)) {
             JsonObject address = new JsonObject();
             JsonArray addresses;
-            address.addProperty("formatted", getValue(cursor, ContactsContract.CommonDataKinds.StructuredPostal.FORMATTED_ADDRESS, columnMemo));
+            addIfPresent(address, "formatted", cursor, columnMemo,
+                         StructuredPostal.FORMATTED_ADDRESS);
             address.addProperty("pref", false);
 			
-            switch (getValueOrMinusOne(cursor, ContactsContract.CommonDataKinds.StructuredPostal.TYPE, columnMemo)) {
-            case ContactsContract.CommonDataKinds.StructuredPostal.TYPE_HOME:
+            switch (getValueOrMinusOne(cursor, StructuredPostal.TYPE, columnMemo)) {
+            case StructuredPostal.TYPE_HOME:
                 address.addProperty("type", "home");
                 break;
-            case ContactsContract.CommonDataKinds.StructuredPostal.TYPE_WORK:
+            case StructuredPostal.TYPE_WORK:
                 address.addProperty("type", "work");
                 break;
-            case ContactsContract.CommonDataKinds.StructuredPostal.TYPE_OTHER:
+            case StructuredPostal.TYPE_OTHER:
                 address.addProperty("type", "other");
                 break;
             case BaseTypes.TYPE_CUSTOM:
-                address.addProperty("type", getValue(cursor, ContactsContract.CommonDataKinds.StructuredPostal.LABEL, columnMemo));
+                addIfPresent(address, "type", cursor, columnMemo,
+                             StructuredPostal.LABEL);
                 break;
             default:
                 address.add("type", JsonNull.INSTANCE);
                 break;
             }
 			
-            address.addProperty("country", getValue(cursor, ContactsContract.CommonDataKinds.StructuredPostal.COUNTRY, columnMemo));
-            address.addProperty("locality", getValue(cursor, ContactsContract.CommonDataKinds.StructuredPostal.CITY, columnMemo));
-            address.addProperty("postalCode", getValue(cursor, ContactsContract.CommonDataKinds.StructuredPostal.POSTCODE, columnMemo));
-            address.addProperty("region", getValue(cursor, ContactsContract.CommonDataKinds.StructuredPostal.REGION, columnMemo));
-            address.addProperty("streetAddress", getValue(cursor, ContactsContract.CommonDataKinds.StructuredPostal.STREET, columnMemo));
+            addIfPresent(address, "country", cursor, columnMemo,
+                         StructuredPostal.COUNTRY);
+            addIfPresent(address, "locality", cursor, columnMemo,
+                         StructuredPostal.CITY);
+            addIfPresent(address, "postalCode", cursor, columnMemo,
+                         StructuredPostal.POSTCODE);
+            addIfPresent(address, "region", cursor, columnMemo,
+                         StructuredPostal.REGION);
+            addIfPresent(address, "streetAddress", cursor, columnMemo,
+                         StructuredPostal.STREET);
 			
             if (contact.has("addresses")) {
                 addresses = contact.getAsJsonArray("addresses");
@@ -644,42 +683,44 @@ class Util {
             }
             addresses.add(address);
             contact.add("addresses", addresses);
-        } else if (mimeType.equals(ContactsContract.CommonDataKinds.Im.CONTENT_ITEM_TYPE)) {
+        } else if (mimeType.equals(Im.CONTENT_ITEM_TYPE)) {
             JsonObject im = new JsonObject();
             JsonArray ims;
-            im.addProperty("value", getValue(cursor, ContactsContract.CommonDataKinds.Im.DATA, columnMemo));
+            addIfPresent(im, "value", cursor, columnMemo,
+                         Im.DATA);
             im.addProperty("pref", false);
 			
-            switch (getValueOrMinusOne(cursor, ContactsContract.CommonDataKinds.Im.PROTOCOL, columnMemo)) {
-            case ContactsContract.CommonDataKinds.Im.PROTOCOL_AIM:
+            switch (getValueOrMinusOne(cursor, Im.PROTOCOL, columnMemo)) {
+            case Im.PROTOCOL_AIM:
                 im.addProperty("type", "aim");
                 break;
-            case ContactsContract.CommonDataKinds.Im.PROTOCOL_MSN:
+            case Im.PROTOCOL_MSN:
                 im.addProperty("type", "msn");
                 break;
-            case ContactsContract.CommonDataKinds.Im.PROTOCOL_YAHOO:
+            case Im.PROTOCOL_YAHOO:
                 im.addProperty("type", "yahoo");
                 break;
-            case ContactsContract.CommonDataKinds.Im.PROTOCOL_SKYPE:
+            case Im.PROTOCOL_SKYPE:
                 im.addProperty("type", "skype");
                 break;
-            case ContactsContract.CommonDataKinds.Im.PROTOCOL_QQ:
+            case Im.PROTOCOL_QQ:
                 im.addProperty("type", "qq");
                 break;
-            case ContactsContract.CommonDataKinds.Im.PROTOCOL_GOOGLE_TALK:
+            case Im.PROTOCOL_GOOGLE_TALK:
                 im.addProperty("type", "google_talk");
                 break;
-            case ContactsContract.CommonDataKinds.Im.PROTOCOL_ICQ:
+            case Im.PROTOCOL_ICQ:
                 im.addProperty("type", "icq");
                 break;
-            case ContactsContract.CommonDataKinds.Im.PROTOCOL_JABBER:
+            case Im.PROTOCOL_JABBER:
                 im.addProperty("type", "jabber");
                 break;
-            case ContactsContract.CommonDataKinds.Im.PROTOCOL_NETMEETING:
+            case Im.PROTOCOL_NETMEETING:
                 im.addProperty("type", "netmeeting");
                 break;
-            case ContactsContract.CommonDataKinds.Im.PROTOCOL_CUSTOM:
-                im.addProperty("type", getValue(cursor, ContactsContract.CommonDataKinds.Im.CUSTOM_PROTOCOL, columnMemo));
+            case Im.PROTOCOL_CUSTOM:
+                addIfPresent(im, "type", cursor, columnMemo,
+                             Im.CUSTOM_PROTOCOL);
                 break;
             default:
                 im.add("type", JsonNull.INSTANCE);
@@ -693,35 +734,38 @@ class Util {
             }
             ims.add(im);
             contact.add("ims", ims);
-        } else if (mimeType.equals(ContactsContract.CommonDataKinds.Website.CONTENT_ITEM_TYPE)) {
+        } else if (mimeType.equals(Website.CONTENT_ITEM_TYPE)) {
             JsonObject url = new JsonObject();
             JsonArray urls;
-            url.addProperty("value", getValue(cursor, ContactsContract.CommonDataKinds.Website.URL, columnMemo));
+
+            addIfPresent(url, "value", cursor, columnMemo,
+                         Website.URL);
             url.addProperty("pref", false);
-            switch (getValueOrMinusOne(cursor, ContactsContract.CommonDataKinds.Website.TYPE, columnMemo)) {
-            case ContactsContract.CommonDataKinds.Website.TYPE_HOME:
+            switch (getValueOrMinusOne(cursor, Website.TYPE, columnMemo)) {
+            case Website.TYPE_HOME:
                 url.addProperty("type", "home");
                 break;
-            case ContactsContract.CommonDataKinds.Website.TYPE_HOMEPAGE:
+            case Website.TYPE_HOMEPAGE:
                 url.addProperty("type", "homepage");
                 break;
-            case ContactsContract.CommonDataKinds.Website.TYPE_BLOG:
+            case Website.TYPE_BLOG:
                 url.addProperty("type", "blog");
                 break;
-            case ContactsContract.CommonDataKinds.Website.TYPE_PROFILE:
+            case Website.TYPE_PROFILE:
                 url.addProperty("type", "profile");
                 break;
-            case ContactsContract.CommonDataKinds.Website.TYPE_WORK:
+            case Website.TYPE_WORK:
                 url.addProperty("type", "work");
                 break;
-            case ContactsContract.CommonDataKinds.Website.TYPE_FTP:
+            case Website.TYPE_FTP:
                 url.addProperty("type", "ftp");
                 break;
-            case ContactsContract.CommonDataKinds.Website.TYPE_OTHER:
+            case Website.TYPE_OTHER:
                 url.addProperty("type", "other");
                 break;
             case BaseTypes.TYPE_CUSTOM:
-                url.addProperty("type", getValue(cursor, ContactsContract.CommonDataKinds.Website.LABEL, columnMemo));
+                addIfPresent(url, "type", cursor, columnMemo,
+                             Website.LABEL);
                 break;
             default:
                 url.add("type", JsonNull.INSTANCE);
@@ -735,23 +779,28 @@ class Util {
             }
             urls.add(url);
             contact.add("urls", urls);
-        } else if (mimeType.equals(ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE)) {
+        } else if (mimeType.equals(Organization.CONTENT_ITEM_TYPE)) {
             JsonObject organization = new JsonObject();
             JsonArray organizations;
-            organization.addProperty("name", getValue(cursor, ContactsContract.CommonDataKinds.Organization.COMPANY, columnMemo));
-            organization.addProperty("department", getValue(cursor, ContactsContract.CommonDataKinds.Organization.DEPARTMENT, columnMemo));
-            organization.addProperty("title", getValue(cursor, ContactsContract.CommonDataKinds.Organization.TITLE, columnMemo));
+
+            addIfPresent(organization, "name", cursor, columnMemo,
+                         Organization.COMPANY);
+            addIfPresent(organization, "department", cursor, columnMemo,
+                         Organization.DEPARTMENT);
+            addIfPresent(organization, "title", cursor, columnMemo,
+                         Organization.TITLE);
             organization.addProperty("pref", false);
 			
-            switch (getValueOrMinusOne(cursor, ContactsContract.CommonDataKinds.Organization.TYPE, columnMemo)) {
-            case ContactsContract.CommonDataKinds.Organization.TYPE_WORK:
+            switch (getValueOrMinusOne(cursor, Organization.TYPE, columnMemo)) {
+            case Organization.TYPE_WORK:
                 organization.addProperty("type", "work");
                 break;
-            case ContactsContract.CommonDataKinds.Organization.TYPE_OTHER:
+            case Organization.TYPE_OTHER:
                 organization.addProperty("type", "other");
                 break;
             case BaseTypes.TYPE_CUSTOM:
-                organization.addProperty("type", getValue(cursor, ContactsContract.CommonDataKinds.Organization.LABEL, columnMemo));
+                addIfPresent(organization, "type", cursor, columnMemo,
+                             Organization.LABEL);
                 break;
             default:
                 organization.add("type", JsonNull.INSTANCE);
@@ -765,7 +814,7 @@ class Util {
             }
             organizations.add(organization);
             contact.add("organizations", organizations);
-        } else if (mimeType.equals(ContactsContract.CommonDataKinds.Photo.CONTENT_ITEM_TYPE)) {
+        } else if (mimeType.equals(Photo.CONTENT_ITEM_TYPE)) {
             JsonArray photos;
             if (contact.has("photos")) {
                 photos = contact.getAsJsonArray("photos");
@@ -774,7 +823,7 @@ class Util {
             }
             try {
                 JsonObject photo = new JsonObject();
-                byte[] photoData = cursor.getBlob(cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Photo.PHOTO));
+                byte[] photoData = cursor.getBlob(cursor.getColumnIndexOrThrow(Photo.PHOTO));
                 if (photoData != null) {
                     photo.addProperty("value", "data:image/jpg;base64," + Base64.encodeToString(photoData, Base64.NO_WRAP));
                     photo.addProperty("pref", false);

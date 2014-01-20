@@ -70,6 +70,16 @@ asyncTest("Select all by ID", 1, function () {
     });
 });
 
+function fixIM(contact) {
+    var IMs = contact.ims;
+
+    for (var i = 0; i < IMs.length; i++) {
+	if (IMs[i].type) {
+	    IMs[i].type = IMs[i].type.toLowerCase();
+	}
+    }
+}
+
 asyncTest("Add contact", 1, function () {
     forge.contact.add(
 	contactJaneDoe,
@@ -82,46 +92,55 @@ asyncTest("Add contact", 1, function () {
 		function(contact) {
 		    // We can't really test the photo -- the iPhone modifies
 		    // it, and we don't yet support it on Android, so screw it.
+		    //
+		    // XXX
+		    // We should really duplicate contactJaneDoe before messing
+		    // with it.
+
 		    delete contact.photos;
+		    delete contactJaneDoe.photos;
 
 		    // On Android, it's really, really hard to tell what 
 		    // the contact's ID will really be, since the ID 
 		    // returned from add() is the raw contact ID, but the 
 		    // ID returned from selectById() can be (usually is?) 
-		    // a 'cooked' contact ID, or a data-row ID, or some such.
-		    // However, other fields should match.
+		    // a 'cooked' contact ID, or a data-row ID, or some
+		    // such.  So, ditch IDs (sigh).
 
-//		    // Make sure the contact's ID is what we asked for...
-//		    if (contact.id != id) {
-//		    	ok(false,
-//			   'asked for ID ' + id + ' but got ID ' + contact.id);
-//		    }
-//		    else {
-		    	// So far so good. Smite the id field...
-			delete contact.id;
+		    delete contact.id;
+		    delete contactJaneDoe.id;
+		    
+		    // Also, at the moment the organization element
+		    // gets a little weird on iOS: when reading back,
+		    // it doesn't have type or pref.  On Android it's
+		    // OK.  So.  If contact doesn't have type or pref,
+		    // smite them in contactJaneDoe.
+		    //
+		    // XXX
+		    // pref, OK, but _type_??
 
-			// ...then make a duplicate of contactJaneDoe with no
-			// id or photo.
+		    if (contactJaneDoe.organizations) {
+			var contactOrg = contact.organizations[0];
+			
+//			if (!contactOrg.pref) {
+//			    delete contactJaneDoe.organizations[0].pref;
+//			}
 
-			delete contactJaneDoe.id;
-			delete contactJaneDoe.photos;
+//			if (!contactOrg.type) {
+//			    delete contactJaneDoe.organizations[0].type;
+//			}
+		    }
 
-			// Also, at the moment the organization element
-			// gets a little weird coming back, so make sure
-			// that contactJaneDoe doesn't have type or pref.
-			//
-			// XXX
-			// pref, OK, but _type_??
-			if (contactJaneDoe.organizations) {
-			    delete contactJaneDoe.organizations[0].pref;
-			    delete contactJaneDoe.organizations[0].type;
-			}
+		    // Finally, IM protocols can get into trouble about
+		    // case.  Force 'em all to lowercase.
 
-			// Finally, compare our two tweaked objects.
-			deepEqual(contact, contactJaneDoe,
-				  'need to get our contact back');
-//		    }
-
+		    fixIM(contact);
+		    fixIM(contactJaneDoe);
+		    
+		    // OK, other stuff should match -- so, finally, do the
+		    // damn comparison.
+		    deepEqual(contact, contactJaneDoe,
+			      'need to get our contact back');
 		    start();
 		},
 
