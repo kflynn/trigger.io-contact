@@ -15,6 +15,7 @@ import java.util.Hashtable;
 import java.util.Map;
 
 import android.accounts.AccountManager;
+import android.annotation.SuppressLint;
 import android.content.ContentProviderOperation;
 import android.content.ContentProviderResult;
 import android.content.ContentResolver;
@@ -125,98 +126,142 @@ public class API {
     }
 
     /**
-     * Return everything we know about a single contact
-     * @param task
-     * @param contact
+     * Add a contact, given an account type and account name.  Here's
+     * where the real magic happens.
+     *
+     * @param task         Active Forge task
+     * @param contact      W3C contact object to add
+     * @param accountName  Account name to add contact under
+     * @param accountType  Account type to add contact under
+     * @returns Nothing, but calls task.error() or task.success() as
+     * appropriate.
      */
+
+    private static void 
+    addContactWithAccount(final ForgeTask task, final JsonObject contact, 
+                          String accountName, String accountType) {
+        // OK, if here, we have an accountName and accountType, and 
+        // we can set up a list of ContentProviderOperations for 
+        // adding our contact.  We'll let Util.opsFromJSONObject() do
+        // the heavy lifting here.
+		
+        ArrayList<ContentProviderOperation> ops =
+            Util.opsFromJSONObject(accountType, accountName, contact);
+
+        ContentResolver resolver = 
+            ForgeApp.getActivity().getContentResolver();
+        ContentProviderResult[] results = null;
+
+        try {
+            results = resolver.applyBatch(ContactsContract.AUTHORITY, 
+                                          ops);
+        }
+        catch (Exception e) {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            PrintStream ps = new PrintStream(baos);
+            e.printStackTrace(ps);
+            String content = baos.toString();
+            ForgeLog.e("Oh no! " + content);
+            task.error("couldn't add contact: " + e,
+                       "UNEXPECTED_FAILURE", null);
+            return;
+        }
+
+        int i = 0;
+        for (ContentProviderResult result : results) {
+            ForgeLog.i("- result " + i + ": " + result);
+            i++;
+        }
+
+        Uri contactURI = results[0].uri;
+        int id = (int)ContentUris.parseId(contactURI);
+        task.success(new JsonPrimitive(String.valueOf(id)));
+    }
+
+    /**
+     * Add a single contact to the device.
+     *
+     * @param task     ForgeTask to work within
+     * @param contact  W3C Contact object representing contact to add
+     */
+
+    @SuppressLint("NewApi")
     public static void add(final ForgeTask task, 
                            @ForgeParam("contact") final JsonObject contact) {
-        // We need an account under which to add this silly contact.  The 
-        // Right Way, it appears, is to use the AccountPicker.  If the user
-        // has only one account, we get it back; otherwise they get to pick
-        // one.
-        // 
-        // The AccountPicker uses an Intent, hence we need a 
-        // ForgeIntentResultHandler to do the heavy lifting.
+        // We need an account under which to add this silly contact.  Sadly, 
+        // the Right Way to do changed in Android 4 (Ice Cream Sandwich).
+        //
+        // So.  What up with our rev of Android?
 
-        ForgeIntentResultHandler handler = new ForgeIntentResultHandler() {
-            @Override
-            public void result(int requestCode, int resultCode, Intent data) {
-                String accountName = null;
-                String accountType = null;
+        int currentAPIVersion = android.os.Build.VERSION.SDK_INT;
+        int ICSAPIVersion = android.os.Build.VERSION_CODES.ICE_CREAM_SANDWICH;
 
-                if (resultCode == RESULT_OK) {
-                    // All good.
-                    accountName = 
-                        data.getStringExtra(AccountManager.KEY_ACCOUNT_NAME);
+        if (currentAPIVersion < ICSAPIVersion) {
+            // Prior to Ice Cream Sandwich, we can just pass null for the
+            // account name and account type.  addContactWithAccount will
+            // take care of the heavy lifting here, so off we go.
 
-                    accountType =
-                        data.getStringExtra(AccountManager.KEY_ACCOUNT_TYPE);
+            addContactWithAccount(task, contact, null, null);
+        }
+        else {
+            // On Ice Cream Sandwich and higher, it appears that the Right
+            // Way is to use the AccountPicker.  If the user has only one
+            // account, we get it back; otherwise they get to pick the one
+            // they want to use.
+            // 
+            // The AccountPicker uses an Intent, hence we need a 
+            // ForgeIntentResultHandler to do the heavy lifting.
+
+            ForgeIntentResultHandler handler = new ForgeIntentResultHandler() {
+                @Override
+                public void result(int requestCode, int resultCode, 
+                                   Intent data) {
+                    String accountName = null;
+                    String accountType = null;
+
+                    if (resultCode == RESULT_OK) {
+                        // All good.
+
+                        String acctNameKey = AccountManager.KEY_ACCOUNT_NAME;
+                        String acctTypeKey = AccountManager.KEY_ACCOUNT_TYPE;
+
+                        accountName = data.getStringExtra(acctNameKey);
+                        accountType = data.getStringExtra(acctTypeKey);
                     
-                    ForgeLog.i("name: " + accountName);
-                    ForgeLog.i("type: " + accountType);
+                        ForgeLog.i("name: " + accountName);
+                        ForgeLog.i("type: " + accountType);
+                    }
+                    else if (resultCode == RESULT_CANCELED) {
+                        task.error("User cancelled account selection",
+                                   "EXPECTED_FAILURE", null);
+                        return;
+                    }
+                    else {    
+                        task.error("Unknown error selecting account",  
+                                   "UNEXPECTED_FAILURE", null);
+                        return;
+                    }
+
+                    // OK, if here, we have an accountName and
+                    // accountType, and we can use addContactWithAccount
+                    // for the heavy lifting.
+
+                    addContactWithAccount(task, contact,
+                                          accountName, accountType);
                 }
-                else if (resultCode == RESULT_CANCELED) {
-                    task.error("User cancelled account selection",
-                               "EXPECTED_FAILURE", null);
-                    return;
-                }
-                else {    
-                    task.error("Unknown error selecting account",  
-                               "UNEXPECTED_FAILURE", null);
-                    return;
-                }
+            };
+            
+            // OK.  Fire up the AccountPicker using our handler.
 
-                // OK, if here, we have an accountName and accountType, and 
-                // we can set up a list of ContentProviderOperations for 
-                // adding our contact.  We'll let Util.opsFromJSONObject() do
-                // the heavy lifting here.
-                
-                ArrayList<ContentProviderOperation> ops =
-                    Util.opsFromJSONObject(task, accountType, accountName,
-                                           contact);
+            Intent intent = 
+                AccountManager.newChooseAccountIntent(
+                    null, null,
+//                    new String[] { GoogleAuthUtil.GOOGLE_ACCOUNT_TYPE },
+                    null,
+                    false, null, null, null, null);
 
-                ContentResolver resolver = 
-                    ForgeApp.getActivity().getContentResolver();
-                ContentProviderResult[] results = null;
-
-                try {
-                    results = resolver.applyBatch(ContactsContract.AUTHORITY, 
-                                                  ops);
-                }
-                catch (Exception e) {
-                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                    PrintStream ps = new PrintStream(baos);
-                    e.printStackTrace(ps);
-                    String content = baos.toString();
-                    ForgeLog.e("Oh no! " + content);
-                    task.error("couldn't add contact: " + e,
-                               "UNEXPECTED_FAILURE", null);
-                    return;
-                }
-
-                int i = 0;
-                for (ContentProviderResult result : results) {
-                    ForgeLog.i("- result " + i + ": " + result);
-                    i++;
-                }
-
-                Uri contactURI = results[0].uri;
-                int id = (int)ContentUris.parseId(contactURI);
-                task.success(new JsonPrimitive(String.valueOf(id)));
-            }
-        };
-
-        // OK.  Fire up the AccountPicker using our handler.
-
-        Intent intent = 
-            AccountManager.newChooseAccountIntent(
-                null, null,
-//                new String[] { GoogleAuthUtil.GOOGLE_ACCOUNT_TYPE },
-                null,
-                false, null, null, null, null);
-
-        ForgeApp.intentWithHandler(intent, handler);
+            ForgeApp.intentWithHandler(intent, handler);
+        }
     }
 }
 

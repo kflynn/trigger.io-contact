@@ -2,8 +2,6 @@ package io.trigger.forge.android.modules.contact;
 
 import io.trigger.forge.android.core.ForgeApp;
 import io.trigger.forge.android.core.ForgeLog;
-import io.trigger.forge.android.core.ForgeTask;
-
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Hashtable;
@@ -36,69 +34,196 @@ import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 
+/**
+ * When adding contacts, we need to convert from W3C Contact objects into
+ * Android's special craziness.  The trivial ways to do that in Java all
+ * make for a huge amount of repetitive typing; to cut down on that, we
+ * use the JSONConverter interface to set up indirect calls to the various
+ * converters.
+ *
+ * All the converters work by, basically, creating an InsertOperation and
+ * just ripping down the relevant properties, using the InsertOperation's
+ * checkProperty and mapType methods.  At the end, they use the
+ * InsertOperation's done method to wrap things up.
+ */
+
 interface JSONConverter {
+    /** 
+     * Execute a conversion.  If all goes well, a single new
+     * ContentProviderOperation is added to ops; if not, nothing is added.
+     *
+     * @param ops     Array of insertion operations to add our contact
+     * @param backRef The index of the raw contact insertion in ops
+     * @param obj     The JsonObject we'll be converting
+     */
+
     public void execute(ArrayList<ContentProviderOperation> ops,
                         int backRef, JsonObject obj);
 }
+
+/**
+ * InsertOperation is basically a ContentProviderOperation.Builder, but 
+ * it keeps track of the JsonObject it's meant to be referencing, and it
+ * keeps track of whether that object actually had any fields to be added.
+ */
 
 class InsertOperation {
     private JsonObject obj;
     private ContentProviderOperation.Builder op;
     private boolean needsAdd;
 
+    /**
+     * Base constructor.
+     *
+     * @param obj          The JsonObject we're going to be studying
+     * @param backRef      Index of the raw-contact operation we're
+     *                     associated with
+     * @param contentType  MIME type for this insert operation.
+     */
+
     public InsertOperation(JsonObject obj, int backRef, String contentType) {
+        // Save the object we'll be looking at...
         this.obj = obj;
+
+        // ...gen up a new ContentProviderOperation.Builder using the
+        // given backRef and contentType...
+
         this.op =  ContentProviderOperation.newInsert(Data.CONTENT_URI)
                    .withValueBackReference(Data.RAW_CONTACT_ID, backRef)
                    .withValue(Data.MIMETYPE, contentType);
+
+        // ...and start out assuming that we _don't_ need to actually save
+        // this.op.  (If we end up not needing this.op at all, the GC will
+        // clean it up.)
+
         this.needsAdd = false;
     }
 
-    private String fetch(String key) {
-        return fetch(key, this.obj);
+    /**
+     * Fetch a property from our JsonObject.
+     *
+     * @param propName The name of the property to fetch
+     * @return A String value.  Missing properties and properties with
+     *         empty values will both be returned as null
+     */
+
+    private String fetch(String propName) {
+        return fetch(propName, this.obj);
     }
 
-    private String fetch(String key, JsonObject obj) {
-        JsonElement child = obj.get(key);
+    /**
+     * Fetch a property from an arbitrary JsonObject.
+     *
+     * Why is this here, if the point of the InsertOperation is that it
+     * saves the object you want to look at?  Mostly for name/displayName,
+     * which are stored in _separate_ JsonObjects in the W3C model, but
+     * must be combined into _the same_ ContentProviderOperation.
+     *
+     * @param propName The name of the property to fetch
+     * @param obj The JsonObject to look into.
+     * @return A String value.  Missing properties and properties with
+     *         empty values will both be returned as null
+     */
+
+    private String fetch(String propName, JsonObject obj) {
+        JsonElement child = obj.get(propName);
 
         if (child == null) {
-            ForgeLog.d("- no key " + key);
+            ForgeLog.d("- no property " + propName);
             return null;
         }
 
         String value = child.getAsString();
 
         if ((value == null) || (value.length() <= 0)) {
-            ForgeLog.d("- empty value for " + key);
+            ForgeLog.d("- empty value for " + propName);
             return null;
         }
 
         return value;
     }
 
+    /**
+     * Shortcut to this.op.withValue: add a key/value pair to our
+     * ContentProviderOperation.
+     *
+     * @param key   Key to use when adding
+     * @param value Value to add (a String)
+     */
+
     public void withValue(String key, String value) {
         this.op.withValue(key, value);
     }
+
+    /**
+     * Shortcut to this.op.withValue: add a key/value pair to our
+     * ContentProviderOperation.
+     *
+     * @param key   Key to use when adding
+     * @param value Value to add (an int)
+     */
 
     public void withValue(String key, int value) {
         this.op.withValue(key, value);
     }
 
-    public void checkField(String field, String key) {
-        checkField(field, key, this.obj);
+    /**
+     * If a given property exists on our JsonObject, add its value to our
+     * ContentProviderOperation, and set this.needsAdd so that we know we
+     * have some real data.
+     *
+     * @param propName Property name to check for
+     * @param key      Key to add under, if it exists
+     */
+
+    public void checkProperty(String propName, String key) {
+        checkProperty(propName, key, this.obj);
     }
 
-    public void checkField(String field, String key, JsonObject obj) {
-        String value = this.fetch(field, obj);
+    /**
+     * If a given property exists on an arbitrary JsonObject, add its
+     * value to our ContentProviderOperation, and set this.needsAdd so
+     * that we know we have some real data.
+     *
+     * Why is this here, if the point of the InsertOperation is that it
+     * saves the object you want to look at?  Mostly for name/displayName,
+     * which are stored in _separate_ JsonObjects in the W3C model, but
+     * must be combined into _the same_ ContentProviderOperation.
+     *
+     * @param propName Property name to check for
+     * @param key      Key to add under, if it exists
+     * @param obj      JsonObject to look into
+     */
 
+    public void checkProperty(String propName, String key, JsonObject obj) {
+        // Grab the property in question...
+        String value = this.fetch(propName, obj);
+
+        // ...and bail if it's not anything relevant.
         if (value == null) {
             return;
         }
 
+        // OK, it's for real.  Add it to our op...
         ForgeLog.d("- adding op for " + key + ": " + value);
         this.withValue(key, value);
+
+        // ...and remember that we added things.
         this.needsAdd = true;
     } 
+
+    /**
+     * Map a String type name to an integer type ID, because Android
+     * really really likes integer type IDs.
+     *
+     * DO NOT set this.needsAdd here.  If the only thing we have for this
+     * object is a type, that's not actually real data.
+     *
+     * @param typeMap    HashMap mapping type names to type ID
+     * @param typeKey    Key to use when saving type ID
+     * @param customType Type ID for custom type
+     * @param labelKey   Key to use for custom type
+     */
 
     public void mapType(HashMap<String, Integer> typeMap,
                         String typeKey, int customType,
@@ -115,16 +240,29 @@ class InsertOperation {
         Integer mappedType = typeMap.get(objType.toLowerCase());
 
         if (mappedType != null) {
+            // We have a type ID -- save it using the typeKey.
             ForgeLog.d("-- type " + objType + ": " + mappedType);
             this.op.withValue(typeKey, mappedType);
         }
         else {
+            // We have no type ID.  Instead, save the customType under
+            // the typeKey, and save the actual unmappable type name under
+            // the labelKey.
+
             ForgeLog.d("-- custom type " + objType + ": " + 
                        customType + ", setting " + labelKey);
             this.op.withValue(typeKey, customType)
                    .withValue(labelKey, objType);
         }
     }
+
+    /**
+     * We're finished.  If we found anything, build out our
+     * ContentProviderOperation and add it to the given
+     * ContentProviderOperation list.
+     *
+     * @param ops ContentProviderOperation list to add our op to
+     */
 
     public void done(ArrayList<ContentProviderOperation> ops) {
         if (this.needsAdd) {
@@ -174,6 +312,14 @@ class Util {
 
         allFieldsForAdd.addAll(allFields);
         allFieldsForAdd.add(new JsonPrimitive("displayName"));
+
+        // typeMap* map W3C type strings to Android type IDs.
+        //
+        // XXX
+        // When reading, there're a bunch of switch()es that perform
+        // the reverse mapping.  We should make the typeMaps objects
+        // that can map either direction -- they're always 1-to-1
+        // mappings, after all.
 
         typeMapOrganization.put("other", Organization.TYPE_OTHER);
         typeMapOrganization.put("work", Organization.TYPE_WORK);
@@ -836,19 +982,66 @@ class Util {
         return contact;
     }
 
+    /**
+     * Convert a W3C name into an Android op.
+     *
+     * NOTE WELL: THIS METHOD IS NOT CALLED THROUGH A JSONConverter.  It
+     * does NOT have the same call signature as one of the methods that
+     * is.
+     *
+     * Why not?  name and displayName are separated in the W3C model, but
+     * combined in the Android model.  As such jsonConvertName and 
+     * jsonConvertDisplayName get called directly, and are passed an
+     * InsertOperation rather than creating one.
+     *
+     * @param op   InsertOperation to use during conversion
+     * @param obj  The JsonObject we'll be converting
+     */
+
     private static void 
     jsonConvertName(InsertOperation op, JsonObject obj) {
-        op.checkField("familyName", StructuredName.FAMILY_NAME, obj);
-        op.checkField("givenName", StructuredName.GIVEN_NAME, obj);
-        op.checkField("middleName", StructuredName.MIDDLE_NAME, obj);
-        op.checkField("honorificPrefix", StructuredName.PREFIX, obj);
-        op.checkField("honorificSuffix", StructuredName.SUFFIX, obj);
+        op.checkProperty("familyName", StructuredName.FAMILY_NAME, obj);
+        op.checkProperty("givenName", StructuredName.GIVEN_NAME, obj);
+        op.checkProperty("middleName", StructuredName.MIDDLE_NAME, obj);
+        op.checkProperty("honorificPrefix", StructuredName.PREFIX, obj);
+        op.checkProperty("honorificSuffix", StructuredName.SUFFIX, obj);
     }
+
+    /**
+     * Convert a W3C displayName into an Android op.
+     *
+     * NOTE WELL: THIS METHOD IS NOT CALLED THROUGH A JSONConverter.  It
+     * does NOT have the same call signature as one of the methods that
+     * is.
+     *
+     * Why not?  name and displayName are separated in the W3C model, but
+     * combined in the Android model.  As such jsonConvertName and 
+     * jsonConvertDisplayName get called directly, and are passed an
+     * InsertOperation rather than creating one.
+     *
+     * @param op   InsertOperation to use during conversion
+     * @param obj  The JsonObject we'll be converting
+     */
 
     private static void 
     jsonConvertDisplayName(InsertOperation op, JsonObject obj) {
-        op.checkField("displayName", StructuredName.DISPLAY_NAME, obj);
+        op.checkProperty("displayName", StructuredName.DISPLAY_NAME, obj);
     }
+
+    /**
+     * Convert a W3C birthday into an Android op.  
+     *
+     * Though this conforms to the JSONConverter calling convention, and
+     * you can refer to the JSONConverter documentation for the basics of
+     * what's going on here, it is not actually called through a
+     * JSONConverter, since birthday is a scalar rather than an array of
+     * JsonObjects. 
+     *
+     * @param ops      ContentProviderOperation list to add our new ops to
+     * @param backRef  Index of the raw-contact operation we're
+     *                 associated with
+     * @param obj      The JsonObject we'll be converting
+     */
 
     private static void 
     jsonConvertBirthday(ArrayList<ContentProviderOperation> ops,
@@ -857,11 +1050,26 @@ class Util {
             new InsertOperation(obj, backRef, 
                                 Event.CONTENT_ITEM_TYPE);
 
-        op.checkField("birthday", Event.START_DATE, obj);
+        op.checkProperty("birthday", Event.START_DATE, obj);
         op.withValue(Event.TYPE, Event.TYPE_BIRTHDAY);
         
         op.done(ops);
     }
+
+    /**
+     * Convert a W3C note into an Android op.  
+     *
+     * Though this conforms to the JSONConverter calling convention, and
+     * you can refer to the JSONConverter documentation for the basics of
+     * what's going on here, it is not actually called through a
+     * JSONConverter, since note is a scalar rather than an array of
+     * JsonObjects.
+     *
+     * @param ops      ContentProviderOperation list to add our new ops to
+     * @param backRef  Index of the raw-contact operation we're
+     *                 associated with
+     * @param obj      The JsonObject we'll be converting
+     */
 
     private static void 
     jsonConvertNote(ArrayList<ContentProviderOperation> ops,
@@ -869,10 +1077,20 @@ class Util {
         InsertOperation op = 
             new InsertOperation(obj, backRef, 
                                 Note.CONTENT_ITEM_TYPE);
-        op.checkField("note", Note.NOTE, obj);
+        op.checkProperty("note", Note.NOTE, obj);
 
         op.done(ops);
     }
+
+    /**
+     * Convert a W3C organization into an Android op.  See the
+     * JSONConverter documentation for the basics of what's going on here.
+     *
+     * @param ops      ContentProviderOperation list to add our new ops to
+     * @param backRef  Index of the raw-contact operation we're
+     *                 associated with
+     * @param obj      The JsonObject we'll be converting
+     */
 
     private static void
     jsonConvertOrganization(ArrayList<ContentProviderOperation> ops,
@@ -884,15 +1102,25 @@ class Util {
             new InsertOperation(obj, backRef, 
                                 Organization.CONTENT_ITEM_TYPE);
 
-        op.checkField("name", Organization.COMPANY);
-        op.checkField("department", Organization.DEPARTMENT);
-        op.checkField("title", Organization.TITLE);
+        op.checkProperty("name", Organization.COMPANY);
+        op.checkProperty("department", Organization.DEPARTMENT);
+        op.checkProperty("title", Organization.TITLE);
         op.mapType(typeMapOrganization,
                    Organization.TYPE, Organization.TYPE_CUSTOM,
                    Organization.LABEL);
 
         op.done(ops);
     }
+
+    /**
+     * Convert a W3C phone number into an Android op.  See the
+     * JSONConverter documentation for the basics of what's going on here.
+     *
+     * @param ops      ContentProviderOperation list to add our new ops to
+     * @param backRef  Index of the raw-contact operation we're
+     *                 associated with
+     * @param obj      The JsonObject we'll be converting
+     */
 
     private static void
     jsonConvertPhone(ArrayList<ContentProviderOperation> ops,
@@ -901,13 +1129,23 @@ class Util {
             new InsertOperation(obj, backRef, 
                                 Phone.CONTENT_ITEM_TYPE);
 
-        op.checkField("value", Phone.NUMBER);
+        op.checkProperty("value", Phone.NUMBER);
         op.mapType(typeMapPhone,
                    Phone.TYPE, Phone.TYPE_CUSTOM,
                    Phone.LABEL);
 
         op.done(ops);
     }
+
+    /**
+     * Convert a W3C email address into an Android op.  See the
+     * JSONConverter documentation for the basics of what's going on here.
+     *
+     * @param ops      ContentProviderOperation list to add our new ops to
+     * @param backRef  Index of the raw-contact operation we're
+     *                 associated with
+     * @param obj      The JsonObject we'll be converting
+     */
 
     private static void
     jsonConvertEmail(ArrayList<ContentProviderOperation> ops,
@@ -916,7 +1154,10 @@ class Util {
             new InsertOperation(obj, backRef, 
                                 Email.CONTENT_ITEM_TYPE);
 
-        op.checkField("value", Email.ADDRESS);
+        // Use Email.DATA instead of Email.ADDRESS for 
+        // Android 2 compatibility.
+        
+        op.checkProperty("value", Email.DATA);
         op.mapType(typeMapEmail,
                    Email.TYPE, Email.TYPE_CUSTOM,
                    Email.LABEL);
@@ -924,14 +1165,24 @@ class Util {
         op.done(ops);
     }
 
+    /**
+     * Convert a W3C address into an Android op.  See the JSONConverter
+     * documentation for the basics of what's going on here.
+     *
+     * @param ops       ContentProviderOperation list to add our new ops to
+     * @param backRef   Index of the raw-contact operation we're
+     *                  associated with
+     * @param obj     The JsonObject we'll be converting
+     */
+
     private static void
     jsonConvertIM(ArrayList<ContentProviderOperation> ops,
-                     int backRef, JsonObject obj) {
+                  int backRef, JsonObject obj) {
         InsertOperation op = 
             new InsertOperation(obj, backRef, 
                                 Im.CONTENT_ITEM_TYPE);
 
-        op.checkField("value", Im.DATA);
+        op.checkProperty("value", Im.DATA);
 
         // "type" in the IM W3C entry really means "protocol".  There isn't
         // a separate type, so we ignore Im.TYPE.
@@ -943,14 +1194,24 @@ class Util {
         op.done(ops);
     }
 
+    /**
+     * Convert a W3C website into an Android op.  See the JSONConverter
+     * documentation for the basics of what's going on here.
+     *
+     * @param ops      ContentProviderOperation list to add our new ops to
+     * @param backRef  Index of the raw-contact operation we're
+     *                 associated with
+     * @param obj      The JsonObject we'll be converting
+     */
+
     private static void
     jsonConvertURL(ArrayList<ContentProviderOperation> ops,
-                     int backRef, JsonObject obj) {
+                   int backRef, JsonObject obj) {
         InsertOperation op = 
             new InsertOperation(obj, backRef, 
                                 Website.CONTENT_ITEM_TYPE);
 
-        op.checkField("value", Website.URL);
+        op.checkProperty("value", Website.URL);
         op.mapType(typeMapURL,
                    Website.TYPE, Website.TYPE_CUSTOM,
                    Website.LABEL);
@@ -958,20 +1219,30 @@ class Util {
         op.done(ops);
     }
 
+    /**
+     * Convert a W3C address into an Android op.  See the JSONConverter
+     * documentation for the basics of what's going on here.
+     *
+     * @param ops      ContentProviderOperation list to add our new ops to
+     * @param backRef  Index of the raw-contact operation we're
+     *                 associated with
+     * @param obj      The JsonObject we'll be converting
+     */
+
     private static void
     jsonConvertAddress(ArrayList<ContentProviderOperation> ops,
-                     int backRef, JsonObject obj) {
+                       int backRef, JsonObject obj) {
         InsertOperation op = 
             new InsertOperation(obj, backRef, 
                                 StructuredPostal.CONTENT_ITEM_TYPE);
 
-        op.checkField("formatted", StructuredPostal.FORMATTED_ADDRESS);
-        op.checkField("streetAddress", StructuredPostal.STREET);
+        op.checkProperty("formatted", StructuredPostal.FORMATTED_ADDRESS);
+        op.checkProperty("streetAddress", StructuredPostal.STREET);
         // We don't support POBOX or NEIGHBORHOOD.
-        op.checkField("locality", StructuredPostal.CITY);
-        op.checkField("region", StructuredPostal.REGION);
-        op.checkField("postalCode", StructuredPostal.POSTCODE);
-        op.checkField("country", StructuredPostal.COUNTRY);
+        op.checkProperty("locality", StructuredPostal.CITY);
+        op.checkProperty("region", StructuredPostal.REGION);
+        op.checkProperty("postalCode", StructuredPostal.POSTCODE);
+        op.checkProperty("country", StructuredPostal.COUNTRY);
 
         op.mapType(typeMapAddress,
                    StructuredPostal.TYPE, StructuredPostal.TYPE_CUSTOM,
@@ -980,10 +1251,27 @@ class Util {
         op.done(ops);
     }
 
+    /**
+     * Iterate over all the objects contained in a JsonArray and call a
+     * converter method for each of them.
+     *
+     * @param ops       ContentProviderOperation list to add our new ops to
+     * @param backRef   Index of the raw-contact operation we're
+     *                  associated with
+     * @param what      Human-readable name for the kind of thing we're
+     *                  iterating (used for debugging)
+     * @param element   JsonElement to iterate (must be a JsonArray
+     *                  underneath) 
+     * @param maxCount  Maximum number of iterations (0 means no limit)
+     * @param conv      JSONConverter to call for each contained object
+     */
+
     private static void iterateElements(ArrayList<ContentProviderOperation> ops,
                                         int backRef, String what, 
                                         JsonElement element, int maxCount,
                                         JSONConverter conv) {
+        // Make sure we have a JsonArray...
+
         if (!element.isJsonArray()) {
             // Not us.
             ForgeLog.d("- " + what + ": not a JSON array");
@@ -992,23 +1280,31 @@ class Util {
 
         JsonArray elementArray = element.getAsJsonArray();
 
+        // ...that contains some data.
+
         if (elementArray.size() == 0) {
             ForgeLog.d("- " + what + ": empty array");
             return;
         }
         
+        // OK.  Remember how many we've done, and off we go.
+
         int count = 0;
 
         for (JsonElement subElement : elementArray) {
             if (!subElement.isJsonObject()) {
-                // Hmm.  Weird, man.
+                // This shouldn't ever happen the way we're using this. 
+                // Continue, I guess.
+
                 ForgeLog.e("- " + what +
                            ": element " + count + " is not an object");
                 continue;
             }
 
+            // Run the converter...
             conv.execute(ops, backRef, subElement.getAsJsonObject());
 
+            // ...and figure out if we need to be done.
             count++;
 
             if ((maxCount > 0) && (count >= maxCount)) {
@@ -1017,8 +1313,19 @@ class Util {
         }
     }
 
+    /**
+     * Convert a W3C Contact into a list of ContentProviderOperations
+     * that will add it to the Android contact list.
+     *
+     * @param accountType  Account type under which to add contact
+     * @param accountName  Account name under which to add contact
+     * @param contact      W3C Contact object representing contact to add
+     * @return An ArrayList of ContentProviderOperation, suitable for 
+     *         handing off to a ContentResolver's applyBatch method
+     */
+
     public static ArrayList<ContentProviderOperation>
-    opsFromJSONObject(ForgeTask task, String accountType, String accountName,
+    opsFromJSONObject(String accountType, String accountName,
                       JsonObject contact) {
         // Start by allocating our operation array...
 
@@ -1040,55 +1347,68 @@ class Util {
         // After that, we have to walk fields and wrangle stuff type by type.
         // Thanks, Google -- WTF were you thinking?
         //
-        // Just to make it worse, we have to screw around with displayName
-        // and the other name information appear separately in JSON, but in
-        // the same element in the Android world.  Sigh.
+        // Just to make it worse, displayName and the other name
+        // information appear separately in JSON, but in the same element
+        // in the Android world.  Sigh.  We'll wrangle that by creating
+        // our nameOp up front.
 
         InsertOperation nameOp = 
             new InsertOperation(contact, rawContactInsertIndex, 
                                 StructuredName.CONTENT_ITEM_TYPE);
 
-        ForgeLog.i("working with contact " + contact);
+        ForgeLog.d("working with contact " + contact);
         
         for (JsonElement jsonField : allFieldsForAdd) {
-            String field = jsonField.getAsString();
-            JsonElement child = contact.get(field);
+            // Grab the property name from our jsonField, and see if
+            // there's really a property there.
+            String propName = jsonField.getAsString();
+            JsonElement property = contact.get(propName);
 
-//            ForgeLog.d("checking for " + field + ": has " +
-//                       (contact.has(field) ? "Y" : "N") + 
-//                       ", by content "  + 
-//                       ((child == null) ? "N" : "Y"));
-
-            if (child == null) {
+            if (property == null) {
                 continue;
             }
 
-            ForgeLog.d("found field " + field);
+            ForgeLog.d("found property " + propName);
+
+            // Start by assuming that we don't need to convert this
+            // property, but that if we change our mind later, we'll want
+            // to convert all instances contained in the property.
+
             JSONConverter conv = null;
             int maxCount = 0;
 
-            if (field.equals("name")) {
-                jsonConvertName(nameOp, child.getAsJsonObject());
+            if (propName.equals("name")) {
+                // We could use iterateElements for this, but we
+                // already have nameOp, so just call jsonConvertName
+                // directly.
+
+                jsonConvertName(nameOp, property.getAsJsonObject());
             }
-            else if (field.equals("displayName")) {
-                // Note that we pass contact here, not child, because 
-                // displayName is a scalar, not an object.
+            else if (propName.equals("displayName")) {
+                // We need to call jsonConvertDisplayName directly here
+                // (and pass contact, not property) because displayName is
+                // a scalar, not an object.
                 ForgeLog.d("calling ConvertDisplayName");
                 jsonConvertDisplayName(nameOp, contact);
             }
-            else if (field.equals("birthday")) {
-                // Note that we pass contact here, not child, because 
-                // birthday is a scalar, not an object.
+            else if (propName.equals("birthday")) {
+                // We need to call jsonConvertBirthday directly here (and
+                // pass contact, not property) because birthday is a
+                // scalar, not an object.
                 ForgeLog.d("calling ConvertBirthday");
                 jsonConvertBirthday(ops, rawContactInsertIndex, contact);
             }
-            else if (field.equals("note")) {
-                // Note that we pass contact here, not child, because 
-                // note is a scalar, not an object.
+            else if (propName.equals("note")) {
+                // We need to call jsonConvertNote directly here (and pass
+                // contact, not property) because note is a scalar, not an
+                // object.
                 ForgeLog.d("calling ConvertNote");
                 jsonConvertNote(ops, rawContactInsertIndex, contact);
             }
-            else if (field.equals("organizations")) {
+            else if (propName.equals("organizations")) {
+                // Set conv for later iteration (but only do the first
+                // organization, not all of them).
+
                 conv = new JSONConverter() {
                     public void execute(ArrayList<ContentProviderOperation> ops,
                                         int backRef, JsonObject obj) {
@@ -1096,9 +1416,12 @@ class Util {
                     }
                 };
 
+                // We only support one organization, so make sure we stop
+                // iterating after the first one.
                 maxCount = 1;
             }
-            else if (field.equals("phoneNumbers")) {
+            else if (propName.equals("phoneNumbers")) {
+                // Set conv for later iteration.
                 conv = new JSONConverter() {
                     public void execute(ArrayList<ContentProviderOperation> ops,
                                         int backRef, JsonObject obj) {
@@ -1106,7 +1429,8 @@ class Util {
                     }
                 };
             }
-            else if (field.equals("addresses")) {
+            else if (propName.equals("addresses")) {
+                // Set conv for later iteration.
                 conv = new JSONConverter() {
                     public void execute(ArrayList<ContentProviderOperation> ops,
                                         int backRef, JsonObject obj) {
@@ -1114,7 +1438,8 @@ class Util {
                     }
                 };
             }
-            else if (field.equals("emails")) {
+            else if (propName.equals("emails")) {
+                // Set conv for later iteration.
                 conv = new JSONConverter() {
                     public void execute(ArrayList<ContentProviderOperation> ops,
                                         int backRef, JsonObject obj) {
@@ -1122,7 +1447,8 @@ class Util {
                     }
                 };
             }
-            else if (field.equals("ims")) {
+            else if (propName.equals("ims")) {
+                // Set conv for later iteration.
                 conv = new JSONConverter() {
                     public void execute(ArrayList<ContentProviderOperation> ops,
                                         int backRef, JsonObject obj) {
@@ -1130,7 +1456,8 @@ class Util {
                     }
                 };
             }
-            else if (field.equals("urls")) {
+            else if (propName.equals("urls")) {
+                // Set conv for later iteration.
                 conv = new JSONConverter() {
                     public void execute(ArrayList<ContentProviderOperation> ops,
                                         int backRef, JsonObject obj) {
@@ -1139,10 +1466,13 @@ class Util {
                 };
             }
 
+            // Do we need to iterate over this element?
+
             if (conv != null) {
-                ForgeLog.d("- iterating for " + field);
-                iterateElements(ops, rawContactInsertIndex, field,
-                				child, maxCount, conv);
+                // Yup.  Let iterateElements do the heavy lifting here.
+                ForgeLog.d("- iterating for " + propName);
+                iterateElements(ops, rawContactInsertIndex, propName,
+                                property, maxCount, conv);
             }
         }
 
