@@ -6,6 +6,8 @@
 //  Copyright (c) 2012 Trigger Corp. All rights reserved.
 //
 
+#import <AddressBookUI/AddressBookUI.h>
+
 #import "contact_API.h"
 #import "contact_Delegate.h"
 #import "contact_Util.h"
@@ -40,7 +42,8 @@
     if (![self addressBookAccessGranted:addressBook]) {
         [task error:@"User didn't grant access to address book" type:@"EXPECTED_FAILURE" subtype:nil];
         return;
-    } else {
+    }
+    else {
         NSArray *thePeople = (NSArray *)CFBridgingRelease(ABAddressBookCopyArrayOfAllPeople(addressBook));
         NSMutableArray *serialisedPeople = [NSMutableArray arrayWithCapacity:[thePeople count]];
         for (int i=0; i < [thePeople count]; i++) {
@@ -49,6 +52,65 @@
         }
         [task success:serialisedPeople];
         return;
+    }
+}
+
++ (void)selectAll:(ForgeTask *)task {
+    [contact_API selectAll:task
+                       fields:@[ @"phoneNumbers", @"emailAddresses" ]];
+}
+
+// add:contact: add a single contact to the user's address book.
+//
+// task: a Forge task
+// contactDict: a single contact, in the form of an NSDictionary that
+// basically conforms to the W3C Contact specification (just in an 
+// NSDictionary, rather than a JSON string).
+//
+// On success, calls [task success] and passes the ID of the newly-created
+// contact.  On failure, calls [task error] with a message that is, we hope,
+// at least mostly helpful.
+//
+// Note also that the translation from the dictionary to an iOS ABPerson 
+// is deliberately paranoid: it's OK if things are missing, or if the
+// contactDict contains things we don't care about, but it is NOT OK if
+// we see an error copying a data element into our new ABPerson.
+
++ (void)add:(ForgeTask*)task contact:(NSDictionary *)contactDict {
+    NSLog(@"Called add: %@", contactDict);
+    
+    ABAddressBookRef addressBook = ABAddressBookCreate();
+    
+    if (![self addressBookAccessGranted:addressBook]) {
+        [task error:@"User didn't grant access to address book" type:@"EXPECTED_FAILURE" subtype:nil];
+        return;
+    }
+    else {
+        CFErrorRef error;
+
+        // Let contact_Util handle the heavy lifting for us.
+        ABRecordRef newPerson = [contact_Util contactCreateFrom:contactDict
+                                                         error_out:&error];
+        
+        if (!newPerson) {
+            NSLog(@"error! %@", error);
+            [task error:@"couldn't create new record" type:@"UNEXPECTED_FAILURE" subtype:nil];
+        }
+        else if (!ABAddressBookAddRecord(addressBook, newPerson, &error)) {
+            NSLog(@"error! %@", error);
+            [task error:@"couldn't add new record" type:@"UNEXPECTED_FAILURE" subtype:nil];
+        }
+        else if (!ABAddressBookSave(addressBook, &error)) {
+            NSLog(@"error! %@", error);
+            [task error:@"couldn't save address book" type:@"UNEXPECTED_FAILURE" subtype:nil];
+        }
+        else {
+            // FINALLY.
+            NSString *idStr =
+                [NSString stringWithFormat:@"%d", ABRecordGetRecordID(newPerson)];
+
+            [task success:idStr];
+        }
     }
 }
 

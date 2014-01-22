@@ -7,12 +7,12 @@
 //
 
 #import <Foundation/Foundation.h>
-#import <AddressBookUI/AddressBookUI.h>
 
 @interface contact_API : NSObject
 
 + (void)select:(ForgeTask*)task;
 + (void)selectById:(ForgeTask*)task id:(NSString *)contactId;
 + (void)selectAll:(ForgeTask*)task;
++ (void)add:(ForgeTask*)task contact:(NSDictionary *)contactDict;
 
 @end

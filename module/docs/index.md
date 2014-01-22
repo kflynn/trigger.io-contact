@@ -1,8 +1,7 @@
 ``contact``: Accessing contacts
 ===============================
 
-The ``forge.contact`` namespace allows access to the native contact
-address book on the device the app is running on.
+The ``forge.contact`` namespace allows access to the native contact address book on the device the app is running on.
 
 Contacts are represented by a simple JavaScript object which follows the [W3C Contacts API](http://www.w3.org/TR/contacts-api/#contact-interface>) as much as possible.
 
@@ -30,24 +29,16 @@ Contacts are represented by a simple JavaScript object which follows the [W3C Co
 !platforms: iOS, Android
 !param: error `function(content)` called with details of any error which may occur
 
+!method: forge.contact.add(contact, success, error)
+!param: contact `contact object` contact to be added
+!param: success `function(id)` callback to be invoked when no errors occur
+!description: Adds a contact to the device's native contact address book.
+!platforms: iOS, Android
+!param: error `function(content)` called with details of any error which may occur
+
 ##Contact object 
 
-When using ``selectAll``, the returned contacts list would look
-something like:
-
-    [
-        {
-            "id": "14894",
-            "displayName": "Mr Joe Bloggs"
-        },
-        {
-            "id": "481516",
-            "displayName": "Mr John Locke"
-        },
-        ...
-    ]
-
-Below is an example of a contact object returned from ``select`` or
+An actual contact object returned from ``select`` or
 ``selectById``, with details for some field types.
 
 	{
@@ -152,9 +143,7 @@ A string value containing a nickname for the contact
 ####phoneNumbers
 
 An array of objects containing details of a contact's phone numbers. Each
-number has a ``value``, a ``type`` (such as ``home`` or ``work``) and
-also a ``pref`` property, which is unsupport on Android and iOS so is
-always false.
+number has a ``value``, a ``type`` (such as ``home`` or ``work``), and a ``pref`` ('preferred') property.  ``pref`` is unsupported on Android and iOS, and is therefore always false.
 
 ####emails
 
@@ -176,10 +165,9 @@ similarly to phoneNumbers and emails.
 
 ####organizations
 
-Contains an array of objects describing organizations the contact is
-part of.
+Contains an array of objects describing organizations the contact is part of.
 
-Can only contain one organization on iOS.
+Only one organization is supported on iOS.
 
 ####birthday
 
@@ -191,11 +179,9 @@ A string which can contain arbitrary information about the contact.
 
 ####photos
 
-Contains an array of thumbnail photos associated with the contact, each
-photo has a value which contains a ``data:`` uri of the image. The
-``type`` and ``pref`` properties are not used.
+Contains an array of thumbnail photos associated with the contact.  Each photo has a value which contains a ``data:`` uri of the image. The ``type`` and ``pref`` properties are not used.
 
-Contains at most 1 photo on iOS.
+Only one photo is supported on iOS.
 
 ####categories
 
@@ -205,6 +191,27 @@ Not available on iOS or Android.
 
 Contains an array of URLs related to the contact, formatted similarly to
 phoneNumbers and emails.
+
+###``selectAll`` contactList
+
+The ``selectAll`` method returns a list of objects that, at minimum, contain the contact's ID and displayName:
+
+    [
+        {
+            "id": "14894",
+            "displayName": "Mr Joe Bloggs"
+        },
+        {
+            "id": "481516",
+            "displayName": "Mr John Locke"
+        },
+        ...
+    ]
+
+If other fields are requested in the selectAll call, they will appear in the objects as well.
+
+> ::Note:: As stated above, due to performance limitations on Android devices, we recommend using ``selectAll`` to get the list of all
+available contact IDs, then lazily load more detailed full contact information with the ``selectById`` method.
 
 ###Permissions
 
