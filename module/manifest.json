@@ -1,8 +1,8 @@
 {
-    "changes": "* Support adding contacts to device address book.",
-    "description": "Access contacts saved by the user on their device.\n\nThe contact module allows you read and write contacts in the device's contact list, either programatically or via a user prompt.", 
-    "min_platform_version": "v2.1.0", 
-    "namespace": "contact",
-    "platform_version": "v2.1.0", 
-    "version": "2.4"
+	"changes": "* Support adding contacts to device address book.",
+	"description": "Access contacts saved by the user on their device.\n\nThe contact module allows you read and write contacts in the device's contact list, either programatically or via a user prompt.",
+	"min_platform_version": "v2.1.0",
+	"namespace": "contact",
+	"platform_version": "v2.1.0",
+	"version": "2.4.1"
 }
